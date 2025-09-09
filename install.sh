@@ -658,7 +658,11 @@ show_configuration_summary() {
 save_configuration_file() {
     local config_file="/tmp/laravel_lemp_config.txt"
     
-    cat > "$config_file" <<EOF
+    # Remove existing config file if it exists
+    rm -f "$config_file" 2>/dev/null || true
+    
+    # Create the configuration file with proper error handling
+    if cat > "$config_file" 2>/dev/null <<EOF
 # S-LEMP Stack Configuration
 # Generated on: $(date)
 
@@ -694,8 +698,58 @@ INSTALL_SSL=$INSTALL_SSL
 # Supervisor status: sudo supervisorctl status
 # SSL setup: sudo certbot --nginx -d $DOMAIN_NAME --email $SSL_EMAIL --agree-tos
 EOF
-    
-    info "Configuration saved to: $config_file"
+    then
+        # Ensure proper permissions
+        chmod 644 "$config_file" 2>/dev/null || true
+        info "Configuration saved to: $config_file"
+        echo ""
+    else
+        warning "Failed to save configuration to $config_file - continuing without saving"
+        # Try alternative location if /tmp fails
+        local alt_config_file="/root/laravel_lemp_config.txt"
+        if cat > "$alt_config_file" 2>/dev/null <<EOF
+# S-LEMP Stack Configuration
+# Generated on: $(date)
+
+PROJECT_NAME=$PROJECT_NAME
+DOMAIN_NAME=$DOMAIN_NAME
+SSL_EMAIL=$SSL_EMAIL
+PROJECT_ROOT=$PROJECT_ROOT
+
+DB_NAME=$DB_NAME
+DB_USER=$DB_USER
+DB_PASSWORD=$DB_PASSWORD
+DB_ROOT_PASSWORD=$DB_ROOT_PASSWORD
+
+REDIS_PASSWORD=$REDIS_PASSWORD
+SUPERVISOR_PROCESS_NUM=$SUPERVISOR_PROCESS_NUM
+QUEUE_DRIVER=$QUEUE_DRIVER
+PHP_VERSION=$PHP_VERSION
+NODE_JS_VERSION=$NODE_JS_VERSION
+INSTALL_SSL=$INSTALL_SSL
+
+# Access URLs after installation:
+# HTTP: http://$DOMAIN_NAME
+# HTTPS: https://$DOMAIN_NAME (after SSL setup)
+
+# Database Connection:
+# Host: localhost
+# Database: $DB_NAME
+# Username: $DB_USER
+# Password: [see above]
+
+# Important Commands:
+# Fix Laravel permissions: fix-laravel-permissions $PROJECT_ROOT/$PROJECT_NAME
+# Supervisor status: sudo supervisorctl status
+# SSL setup: sudo certbot --nginx -d $DOMAIN_NAME --email $SSL_EMAIL --agree-tos
+EOF
+        then
+            chmod 644 "$alt_config_file" 2>/dev/null || true
+            info "Configuration saved to alternative location: $alt_config_file"
+        else
+            warning "Could not save configuration file to any location"
+        fi
+    fi
 }
 
 # =========================================================================
