@@ -83,7 +83,7 @@ The broader goals include:
 
 ```bash
 # Download the installation script
-wget https://raw.githubusercontent.com/msulaimanmisri/s-lemp/blob/main/install.sh
+wget https://raw.githubusercontent.com/msulaimanmisri/s-lemp/main/install.sh
 
 # Make it executable
 chmod +x install.sh
@@ -96,14 +96,14 @@ sudo ./install.sh
 
 ```bash
 # Download and run in one command (interactive mode)
-wget -qO- https://raw.githubusercontent.com/msulaimanmisri/s-lemp/blob/main/install.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/msulaimanmisri/s-lemp/main/install.sh | sudo bash
 ```
 
 ### Method 3: Non-Interactive Installation
 
 ```bash
 # Download the script
-wget https://raw.githubusercontent.com/msulaimanmisri/s-lemp/blob/main/install.sh
+wget https://raw.githubusercontent.com/msulaimanmisri/s-lemp/main/install.sh
 
 # Run in non-interactive mode with defaults
 sudo ./install.sh --non-interactive
@@ -271,7 +271,7 @@ fix-laravel-permissions /var/www/your-project
 
 ```bash
 # Download removal script
-wget https://raw.githubusercontent.com/msulaimanmisri/s-lemp/blob/main/remove.sh
+wget https://raw.githubusercontent.com/msulaimanmisri/s-lemp/main/remove.sh
 
 # Make executable and run
 chmod +x remove.sh
