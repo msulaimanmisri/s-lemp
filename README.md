@@ -83,7 +83,7 @@ The broader goals include:
 
 ```bash
 # Download the installation script
-wget https://raw.githubusercontent.com/msulaimanmisri/s-lemp/main/install.sh
+wget https://raw.githubusercontent.com/msulaimanmisri/s-lemp/blob/main/install.sh
 
 # Make it executable
 chmod +x install.sh
@@ -96,14 +96,14 @@ sudo ./install.sh
 
 ```bash
 # Download and run in one command (interactive mode)
-wget -qO- https://raw.githubusercontent.com/msulaimanmisri/s-lemp/main/install.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/msulaimanmisri/s-lemp/blob/main/install.sh | sudo bash
 ```
 
 ### Method 3: Non-Interactive Installation
 
 ```bash
 # Download the script
-wget https://raw.githubusercontent.com/msulaimanmisri/s-lemp/main/install.sh
+wget https://raw.githubusercontent.com/msulaimanmisri/s-lemp/blob/main/install.sh
 
 # Run in non-interactive mode with defaults
 sudo ./install.sh --non-interactive
@@ -209,7 +209,7 @@ The script installs Certbot but **does not automatically generate SSL certificat
 
 ## 🔄 Post-Installation
 
-### Deploy Your Laravel Application
+### Deploy Your Laravel Application (This is only a guide; Laravel deployment is not automated)
 
 1. **Clone your project**:
    ```bash
@@ -271,7 +271,7 @@ fix-laravel-permissions /var/www/your-project
 
 ```bash
 # Download removal script
-wget https://raw.githubusercontent.com/msulaimanmisri/s-lemp/main/remove.sh
+wget https://raw.githubusercontent.com/msulaimanmisri/s-lemp/blob/main/remove.sh
 
 # Make executable and run
 chmod +x remove.sh
