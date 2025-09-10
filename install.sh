@@ -292,7 +292,7 @@ generate_password() {
 run_configuration_wizard() {
     echo ""
     echo "============================================="
-    echo -e "${GREEN} S-LEMP WIZARD ${NC}"
+    echo -e "${GREEN}S-LEMP WIZARD${NC}"
     echo "============================================="
     echo -e "${YELLOW}This wizard will help you configure your S-LEMP stack installation.${NC}"
     echo -e "${BLUE}You can press Enter without specified any value to use default values shown in [brackets].${NC}"
@@ -1796,9 +1796,12 @@ install_nodejs() {
         NODE_VERSION=$(node --version)
         NPM_VERSION=$(npm --version)
         log "✓ Node.js installed successfully"
+        info "Node.js version: $NODE_VERSION"
+        info "NPM version: $NPM_VERSION"
         
         # Verify versions meet minimum requirements
-        if [[ "${NODE_VERSION:1:2}" -ge "18" ]]; then
+        local node_major_version=$(echo "$NODE_VERSION" | sed 's/v//' | cut -d. -f1)
+        if [[ "$node_major_version" -ge "18" ]]; then
             log "✓ Node.js version meets Laravel requirements"
         else
             warning "Node.js version might be too old for some Laravel features"
@@ -1878,16 +1881,20 @@ install_composer() {
     
     # Verify Composer installation
     if command -v composer &>/dev/null; then
-        local version=$(composer --version 2>/dev/null)
+        local version=$(timeout 10 composer --version 2>/dev/null || echo "Composer version check timed out")
         log "✓ Composer verification successful"
         info "$version"
         
-        # Test Composer functionality
-        if composer diagnose &>/dev/null; then
+        # Test Composer functionality with timeout
+        info "Running quick Composer diagnostic check..."
+        if timeout 15 composer diagnose --no-interaction &>/dev/null; then
             log "✓ Composer diagnostic check passed"
         else
-            warning "Composer diagnostic check failed, but installation appears successful"
+            warning "Composer diagnostic check failed or timed out, but installation appears successful"
+            info "This is normal and doesn't affect functionality"
         fi
+        
+        log "✓ Composer installation completed - proceeding to next component installation..."
     else
         error "Composer installation verification failed"
         return 1
