@@ -185,6 +185,25 @@ info() {
     echo -e "${BLUE}[INFO] $1${NC}"
 }
 
+# Progress indicator function
+show_progress() {
+    local step="$1"
+    local total="$2" 
+    local message="$3"
+    local percent=$((step * 100 / total))
+    local completed=$((percent / 5))
+    local remaining=$((20 - completed))
+    
+    printf "\r${CYAN}[${NC}"
+    printf "%*s" $completed | tr ' ' '█'
+    printf "%*s" $remaining | tr ' ' '░'
+    printf "${CYAN}] ${percent}%% - ${message}${NC}"
+    
+    if [[ $step -eq $total ]]; then
+        echo ""
+    fi
+}
+
 # =========================================================================
 # Interactive Configuration Wizard Functions
 # =========================================================================
@@ -288,16 +307,40 @@ generate_password() {
     echo "$password"
 }
 
-# Main configuration wizard
-run_configuration_wizard() {
+# Function to display S-LEMP banner
+show_slemp_banner() {
+    clear
+    echo ""
+    echo -e "${CYAN}"
+    echo "███████╗      ██╗     ███████╗███╗   ███╗██████╗ "
+    echo "██╔════╝      ██║     ██╔════╝████╗ ████║██╔══██╗"
+    echo "███████╗█████╗██║     █████╗  ██╔████╔██║██████╔╝"
+    echo "╚════██║╚════╝██║     ██╔══╝  ██║╚██╔╝██║██╔═══╝ "
+    echo "███████║      ███████╗███████╗██║ ╚═╝ ██║██║     "
+    echo "╚══════╝      ╚══════╝╚══════╝╚═╝     ╚═╝╚═╝     "
+    echo -e "${NC}"
+    echo ""
+    echo -e "${GREEN}S-LEMP INSTALLATION FRAMEWORK BY SULAIMAN MISRI${NC}"
+    echo -e "${YELLOW}** Deploy a production-ready Laravel environment effortlessly. ${NC}"
+    echo -e "${YELLOW}** All optimized for your Laravel application. ${NC}"
+    echo ""
+}
+
+# Function to display configuration wizard header (no clear)
+show_config_wizard_header() {
     echo ""
     echo "============================================="
-    echo -e "${GREEN}S-LEMP WIZARD${NC}"
+    echo -e "${GREEN}CONFIGURATION WIZARD${NC}"
     echo "============================================="
     echo -e "${YELLOW}This wizard will help you configure your S-LEMP stack installation.${NC}"
-    echo -e "${BLUE}You can press Enter without specified any value to use default values shown in [brackets].${NC}"
+    echo -e "${BLUE}You can press Enter without specifying any value to use default values shown in [brackets].${NC}"
     echo ""
+}
 
+# Main configuration wizard
+run_configuration_wizard() {
+    show_config_wizard_header
+    
     if [[ ! -t 0 ]]; then
         INTERACTIVE_MODE=false
     fi
@@ -602,24 +645,24 @@ show_configuration_summary() {
     echo -e "${CYAN}CONFIGURATION SUMMARY${NC}"
     echo "============================================="
     echo ""
-    echo -e "${YELLOW}Project Configuration:${NC}"
-    echo -e "  - Project Name: ${GREEN}$PROJECT_NAME${NC}"
-    echo -e "  - Domain: ${GREEN}$DOMAIN_NAME${NC}"
-    echo -e "  - SSL Email: ${GREEN}$SSL_EMAIL${NC}"
-    echo -e "  - Project Path: ${GREEN}$PROJECT_ROOT/$PROJECT_NAME${NC}"
+    echo -e "${YELLOW}📁 Project Configuration:${NC}"
+    echo -e "   ${WHITE}├─${NC} Project Name: ${GREEN}$PROJECT_NAME${NC}"
+    echo -e "   ${WHITE}├─${NC} Domain: ${GREEN}$DOMAIN_NAME${NC}"
+    echo -e "   ${WHITE}├─${NC} SSL Email: ${GREEN}$SSL_EMAIL${NC}"
+    echo -e "   ${WHITE}└─${NC} Project Path: ${GREEN}$PROJECT_ROOT/$PROJECT_NAME${NC}"
     echo ""
-    echo -e "${YELLOW}Database Configuration:${NC}"
-    echo -e "  - Database Name: ${GREEN}$DB_NAME${NC}"
-    echo -e "  - Database User: ${GREEN}$DB_USER${NC}"
-    echo -e "  - Database Password: ${GREEN}[HIDDEN]${NC}"
-    echo -e "  - Root Password: ${GREEN}[HIDDEN]${NC}"
+    echo -e "${YELLOW}🗄️  Database Configuration:${NC}"
+    echo -e "   ${WHITE}├─${NC} Database Name: ${GREEN}$DB_NAME${NC}"
+    echo -e "   ${WHITE}├─${NC} Database User: ${GREEN}$DB_USER${NC}"
+    echo -e "   ${WHITE}├─${NC} Database Password: ${GREEN}[HIDDEN]${NC}"
+    echo -e "   ${WHITE}└─${NC} Root Password: ${GREEN}[HIDDEN]${NC}"
     echo ""
     echo -e "${YELLOW}Services Configuration:${NC}"
-    echo -e "  - Redis Password: ${GREEN}[HIDDEN]${NC}"
-    echo -e "  - Queue Workers: ${GREEN}$SUPERVISOR_PROCESS_NUM${NC}"
-    echo -e "  - Queue Driver: ${GREEN}$QUEUE_DRIVER${NC}"
-    echo -e "  - PHP Version: ${GREEN}$PHP_VERSION${NC}"
-    echo -e "  - Node.js Version: ${GREEN}$NODE_JS_VERSION${NC}"
+    echo -e "   ${WHITE}├─${NC} Redis Password: ${GREEN}[HIDDEN]${NC}"
+    echo -e "   ${WHITE}├─${NC} Queue Workers: ${GREEN}$SUPERVISOR_PROCESS_NUM${NC}"
+    echo -e "   ${WHITE}├─${NC} Queue Driver: ${GREEN}$QUEUE_DRIVER${NC}"
+    echo -e "   ${WHITE}├─${NC} PHP Version: ${GREEN}$PHP_VERSION${NC}"
+    echo -e "   ${WHITE}└─${NC} Node.js Version: ${GREEN}$NODE_JS_VERSION${NC}"
     echo ""
     echo "============================================="
     echo ""
@@ -776,6 +819,7 @@ check_ubuntu() {
     echo "============================================="
     echo -e "${GREEN}CURRENT SERVER SPECS${NC}"
     echo "============================================="
+    echo ""
     
     # Operating System Information
     UBUNTU_VERSION=$(lsb_release -rs)
@@ -783,20 +827,21 @@ check_ubuntu() {
     KERNEL_VERSION=$(uname -r)
     ARCHITECTURE=$(uname -m)
     
-    echo "Operating System: Ubuntu $UBUNTU_VERSION ($UBUNTU_CODENAME)"
-    info "Kernel Version: $KERNEL_VERSION"
-    info "Architecture: $ARCHITECTURE"
+    echo -e "${YELLOW}🖥️  Operating System:${NC}"
+    echo -e "   ${WHITE}├─${NC} Ubuntu: ${GREEN}$UBUNTU_VERSION ($UBUNTU_CODENAME)${NC}"
+    echo -e "   ${WHITE}├─${NC} Kernel: ${GREEN}$KERNEL_VERSION${NC}"
+    echo -e "   ${WHITE}└─${NC} Architecture: ${GREEN}$ARCHITECTURE${NC}"
     
     # CPU Information
     CPU_MODEL=$(grep "model name" /proc/cpuinfo | head -n1 | cut -d':' -f2 | xargs)
     CPU_CORES=$(nproc --all)
     CPU_THREADS=$(grep -c ^processor /proc/cpuinfo)
     
-    echo " "
-    echo "CPU Information:"
-    info "Model: $CPU_MODEL"
-    info "Cores: $CPU_CORES"
-    info "Threads: $CPU_THREADS"
+    echo ""
+    echo -e "${YELLOW}🔧 CPU Information:${NC}"
+    echo -e "   ${WHITE}├─${NC} Model: ${GREEN}$CPU_MODEL${NC}"
+    echo -e "   ${WHITE}├─${NC} Cores: ${GREEN}$CPU_CORES${NC}"
+    echo -e "   ${WHITE}└─${NC} Threads: ${GREEN}$CPU_THREADS${NC}"
     
     # Memory Information
     TOTAL_RAM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
@@ -804,16 +849,16 @@ check_ubuntu() {
     AVAILABLE_RAM_KB=$(grep MemAvailable /proc/meminfo | awk '{print $2}')
     AVAILABLE_RAM_GB=$(printf "%.2f" $(echo "scale=2; $AVAILABLE_RAM_KB/1024/1024" | bc -l 2>/dev/null) 2>/dev/null || echo "$(($AVAILABLE_RAM_KB/1024/1024))")
     
-    echo " "
-    echo "Memory Information:"
-    info "Total RAM: ${TOTAL_RAM_GB} GB"
-    info "Available RAM: ${AVAILABLE_RAM_GB} GB"
+    echo ""
+    echo -e "${YELLOW}💾 Memory Information:${NC}"
+    echo -e "   ${WHITE}├─${NC} Total RAM: ${GREEN}${TOTAL_RAM_GB} GB${NC}"
+    echo -e "   ${WHITE}└─${NC} Available RAM: ${GREEN}${AVAILABLE_RAM_GB} GB${NC}"
     
     # Disk Information
-    echo " "
-    echo "Storage Information:"
+    echo ""
+    echo -e "${YELLOW}💽 Storage Information:${NC}"
     df -h / | tail -n1 | while read filesystem size used available percent mountpoint; do
-        info "Root Partition: $size total, $used used, $available available ($percent used)"
+        echo -e "   ${WHITE}└─${NC} Root Partition: ${GREEN}$size total, $used used, $available available ($percent used)${NC}"
     done
     
     # Additional disk information
@@ -821,65 +866,63 @@ check_ubuntu() {
     info "Total Disk Space: ${TOTAL_DISK_GB} GB"
     
     # Network Information
-    echo " "
-    echo "Network Information:"
+    echo ""
+    echo -e "${YELLOW}🌐 Network Information:${NC}"
     # Get primary network interface
     PRIMARY_INTERFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
     if [[ -n "$PRIMARY_INTERFACE" ]]; then
         LOCAL_IP=$(ip addr show $PRIMARY_INTERFACE | grep "inet " | awk '{print $2}' | cut -d/ -f1)
-        info "Primary Interface: $PRIMARY_INTERFACE"
-        info "Local IP: $LOCAL_IP"
+        echo -e "   ${WHITE}├─${NC} Primary Interface: ${GREEN}$PRIMARY_INTERFACE${NC}"
+        echo -e "   ${WHITE}├─${NC} Local IP: ${GREEN}$LOCAL_IP${NC}"
     fi
     
     # Try to get public IP
     PUBLIC_IP=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null || echo "Unable to detect")
-    info "Public IP: $PUBLIC_IP"
+    echo -e "   ${WHITE}└─${NC} Public IP: ${GREEN}$PUBLIC_IP${NC}"
     
     # System Load and Uptime
-    echo " "
-    echo "System Status:"
+    echo ""
+    echo -e "${YELLOW}📊 System Status:${NC}"
     UPTIME=$(uptime -p 2>/dev/null || uptime | awk '{print $3,$4}')
     LOAD_AVERAGE=$(uptime | awk -F'load average:' '{print $2}' | xargs)
-    info "Uptime: $UPTIME"
-    info "Load Average: $LOAD_AVERAGE"
+    echo -e "   ${WHITE}├─${NC} Uptime: ${GREEN}$UPTIME${NC}"
+    echo -e "   ${WHITE}└─${NC} Load Average: ${GREEN}$LOAD_AVERAGE${NC}"
     
     # Check if system meets Laravel requirements
-    echo " "
+    echo ""
     echo "============================================="
     echo -e "${GREEN}S-LEMP INSPECTION${NC}"
     echo "============================================="
+    echo ""
     
     # RAM Check (minimum 1GB recommended for Laravel)
     if (( $(echo "$TOTAL_RAM_GB >= 1" | bc -l 2>/dev/null || echo "$(($TOTAL_RAM_KB >= 1048576))") )); then
-        log "RAM: ${TOTAL_RAM_GB} GB (Sufficient for Laravel)"
+        echo -e "${GREEN}✅ RAM: ${TOTAL_RAM_GB} GB (Sufficient for Laravel)${NC}"
     else
-        warning "RAM: ${TOTAL_RAM_GB} GB (Low - 1GB+ recommended for Laravel)"
+        echo -e "${YELLOW}⚠️  RAM: ${TOTAL_RAM_GB} GB (Low - 1GB+ recommended for Laravel)${NC}"
     fi
-    echo " "
     
     # CPU Check
     if [[ $CPU_CORES -ge 1 ]]; then
-        info "CPU: $CPU_CORES cores (Sufficient)"
+        echo -e "${GREEN}✅ CPU: $CPU_CORES cores (Sufficient)${NC}"
     else
-        warning "CPU: $CPU_CORES cores (May be insufficient)"
+        echo -e "${YELLOW}⚠️  CPU: $CPU_CORES cores (May be insufficient)${NC}"
     fi
-    echo " "
     
     # Disk Check (minimum 10GB recommended)
     if [[ $TOTAL_DISK_GB -ge 10 ]]; then
-        echo "Disk: ${TOTAL_DISK_GB} GB (Sufficient)"
+        echo -e "${GREEN}✅ Disk: ${TOTAL_DISK_GB} GB (Sufficient)${NC}"
     else
-        warning "Disk: ${TOTAL_DISK_GB} GB (Low - 10GB+ recommended)"
+        echo -e "${YELLOW}⚠️  Disk: ${TOTAL_DISK_GB} GB (Low - 10GB+ recommended)${NC}"
     fi
-    echo " "
 
     # Ubuntu version compatibility check
     if [[ ! "$UBUNTU_VERSION" =~ ^(22|24)\. ]]; then
-        warning "Ubuntu version $UBUNTU_VERSION may not be fully supported"
+        echo -e "${YELLOW}⚠️  Ubuntu version $UBUNTU_VERSION may not be fully supported${NC}"
     else
-        info "Ubuntu version $UBUNTU_VERSION is fully supported"
+        echo -e "${GREEN}✅ Ubuntu version $UBUNTU_VERSION is fully supported${NC}"
     fi
-    echo " "
+    echo ""
     
     # Additional Ubuntu version compatibility check with user prompt
     if [[ ! "$UBUNTU_VERSION" =~ ^(22|24)\. ]]; then
@@ -897,10 +940,11 @@ check_ubuntu() {
 # UPDATE SYSTEM AND INSTALL CORE SERVICES
 # =========================================================================
 update_and_install_core_system() {
-    echo " "
+    echo ""
     echo "============================================="
-    echo "Updating core system"
+    echo -e "${GREEN}🔄 UPDATING CORE SYSTEM${NC}"
     echo "============================================="
+    echo ""
     
     # Kill any apt processes that might be hanging
     sudo killall apt apt-get 2>/dev/null || true
@@ -937,10 +981,11 @@ update_and_install_core_system() {
         warning "Some packages failed to upgrade, continuing anyway..."
     fi
 
-    echo "   "
+    echo ""
     echo "============================================="
-    echo "Installing essential packages"
+    echo -e "${GREEN}📦 INSTALLING ESSENTIAL PACKAGES${NC}"
     echo "============================================="
+    echo ""
     
     sudo apt install -y curl wget git unzip software-properties-common apt-transport-https ca-certificates gnupg lsb-release bc
 }
@@ -949,17 +994,19 @@ update_and_install_core_system() {
 # INSTALL NGINX
 # =========================================================================
 install_nginx() {
-    echo "   "
+    echo ""
     echo "============================================="
-    echo "Start Installing Nginx"
+    echo -e "${GREEN}🌐 INSTALLING NGINX${NC}"
     echo "============================================="
+    echo ""
     
     sudo apt install -y nginx
     
-    echo "   "
+    echo ""
     echo "============================================="
-    echo "Configuring and starting Nginx"
+    echo -e "${GREEN}CONFIGURING NGINX${NC}"
     echo "============================================="
+    echo ""
     
     sudo systemctl start nginx
     sudo systemctl enable nginx
@@ -975,7 +1022,7 @@ install_nginx() {
     # Clean up default web files
     echo "   "
     echo "============================================="
-    echo "Cleaning up default web files..."
+    echo -e "${GREEN}Cleaning up default web files...${NC}"
     echo "============================================="
     
     # Remove default Nginx/Apache HTML files
@@ -1010,7 +1057,7 @@ install_nginx() {
 create_project_structure() {
     echo " "
     echo "============================================="
-    echo "Creating project directory and Nginx site configuration"
+    echo -e "${GREEN}Creating project directory and Nginx site configuration${NC}"
     echo "============================================="
     
     # Create project directory (empty, ready for Laravel deployment)
@@ -1021,7 +1068,7 @@ create_project_structure() {
     # Create a placeholder file to indicate the directory is ready for Laravel
     echo " "
     echo "============================================="
-    echo "Preparing directory for Laravel deployment..."
+    echo -e "${GREEN}Preparing directory for Laravel deployment...${NC}"
     echo "============================================="
     
     # Create a README file explaining how to deploy Laravel
@@ -1262,7 +1309,7 @@ EOF
 verify_php_extensions() {
     echo " "
     echo "============================================="
-    echo "Verifying and fixing PHP extensions..."
+    echo -e "${GREEN}Verifying and fixing PHP extensions...${NC}"
     echo "============================================="
     
     # Wait for PHP to be fully ready
@@ -1292,6 +1339,7 @@ verify_php_extensions() {
             # Special case for redis extension
             elif [[ "$ext" == "redis" ]]; then
                 if php${PHP_VERSION} -m | grep -q "redis"; then
+                    echo ""
                     log "✓ PHP Redis extension is loaded"
                 else
                     warning "⚠ PHP Redis extension is not loaded"
@@ -1444,7 +1492,7 @@ install_php() {
 
     echo "   "
     echo "============================================="
-    echo "Start Installing Ondrej PHP PPA"
+    echo -e "${GREEN}Start Installing Ondrej PHP PPA${NC}"
     echo "============================================="
     sudo apt install -y software-properties-common
     sudo add-apt-repository ppa:ondrej/php -y 
@@ -1452,7 +1500,7 @@ install_php() {
 
     echo "   "
     echo "============================================="
-    echo "Installing PHP ${PHP_VERSION} + Extensions"
+    echo -e "${GREEN}Installing PHP ${PHP_VERSION} + Extensions${NC}"
     echo "============================================="
     sudo systemctl stop php${PHP_VERSION}-fpm 2>/dev/null || true # ignore error if not running
 
@@ -1505,18 +1553,19 @@ install_php() {
 
     echo "   "
     echo "============================================="
-    echo "Create Directory and Files"
+    echo -e "${GREEN}Create Directory and Files${NC}"
     echo "============================================="
     sudo mkdir -p /var/log/php
     sudo chown www-data:www-data /var/log/php
     sudo mkdir -p /etc/php/${PHP_VERSION}/fpm/pool.d
+    echo "Success creating directory and files"
 
     # Verify and fix PHP extensions
     verify_php_extensions
 
     echo "   "
     echo "============================================="
-    echo "Creating PHP-FPM pool configuration"
+    echo -e "${GREEN}Creating PHP-FPM pool configuration${NC}"
     echo "============================================="
     sudo tee /etc/php/${PHP_VERSION}/fpm/pool.d/${PROJECT_NAME}.conf > /dev/null <<EOF
 [${PROJECT_NAME}]
@@ -1569,11 +1618,13 @@ EOF
 
     echo "   "
     echo "============================================="
-    echo "Optimizing PHP-FPM Complete"
+    echo -e "${GREEN}Optimizing PHP-FPM Complete${NC}"
     echo "============================================="
+    echo "Optimizing PHP-FPM for Laravel is complete"
     echo " "
+
     echo "============================================="
-    echo "Starting and configuring PHP-FPM..."
+    echo -e "${GREEN}Starting and configuring PHP-FPM...${NC}"
     echo "============================================="
     
     sudo systemctl start php${PHP_VERSION}-fpm
@@ -1591,7 +1642,7 @@ EOF
     # Final verification of PHP extensions after PHP-FPM restart
     echo " "
     echo "============================================="
-    echo "Final verification of PHP extensions..."
+    echo -e "${GREEN}Final verification of PHP extensions...${NC}"
     echo "============================================="
     
     # Quick verification of critical extensions
@@ -1681,14 +1732,14 @@ EOF
 install_mariadb() {
     echo " "
     echo "============================================="
-    echo "Installing MariaDB database server..."
+    echo -e "${GREEN}Installing MariaDB database server...${NC}"
     echo "============================================="
     
     sudo apt install -y mariadb-server mariadb-client
     
     echo " "
     echo "============================================="
-    echo "Starting and configuring MariaDB..."
+    echo -e "${GREEN}Starting and configuring MariaDB...${NC}"
     echo "============================================="
     
     sudo systemctl start mariadb
@@ -1696,7 +1747,7 @@ install_mariadb() {
 
     echo "   "
     echo "============================================="
-    echo "Securing MariaDB installation"
+    echo -e "${GREEN}Securing MariaDB installation${NC}"
     echo "============================================="
     
     # Wait for MariaDB to be fully ready
@@ -1729,7 +1780,7 @@ install_mariadb() {
 
     echo "   "
     echo "============================================="
-    echo "Creating database and user for Laravel"
+    echo -e "${GREEN}Creating database and user for Laravel${NC}"
     echo "============================================="
     
     # Create database and user with error handling
@@ -1769,7 +1820,7 @@ install_mariadb() {
 install_nodejs() {
     echo " "
     echo "============================================="
-    echo "Installing Node.js..."
+    echo -e "${GREEN}Installing Node.js...${NC}"
     echo "============================================="
     
     # Check if NodeSource repository is already added
@@ -1789,7 +1840,7 @@ install_nodejs() {
     
     echo " "
     echo "============================================="
-    echo "Verifying Node.js installation..."
+    echo -e "${GREEN}Verifying Node.js installation...${NC}"
     echo "============================================="
     
     if command -v node &>/dev/null && command -v npm &>/dev/null; then
@@ -1818,7 +1869,7 @@ install_nodejs() {
 install_composer() {
     echo "   "
     echo "============================================="
-    echo "Installing Composer"
+    echo -e "${GREEN}Installing Composer${NC}"
     echo "============================================="
     
     # Check if Composer is already installed
@@ -1906,7 +1957,7 @@ install_composer() {
 install_redis() {
     echo "   "
     echo "============================================="
-    echo "Installing Redis server..."
+    echo -e "${GREEN}Installing Redis server...${NC}"
     echo "============================================="
     
     sudo apt install -y redis-server
@@ -1914,7 +1965,7 @@ install_redis() {
     # Configure Redis for production use
     echo "   "
     echo "============================================="
-    echo "Configuring Redis for Laravel..."
+    echo -e "${GREEN}Configuring Redis for Laravel...${NC}"
     echo "============================================="
     
     # Apply Laravel-optimized Redis configuration
@@ -2003,7 +2054,7 @@ install_redis() {
     # Test Redis configuration before starting
     echo "   "
     echo "============================================="
-    echo "Testing Redis configuration..."
+    echo -e "${GREEN}Testing Redis configuration...${NC}"
     echo "============================================="
     
     if sudo redis-server -t -c "$redis_conf" 2>/dev/null; then
@@ -2057,7 +2108,7 @@ install_redis() {
 install_supervisor() {
     echo " "
     echo "============================================="
-    echo "Installing Supervisor (process manager)..."
+    echo -e "${GREEN}Installing Supervisor (process manager)...${NC}"
     echo "============================================="
     
     sudo apt install -y supervisor
@@ -2087,7 +2138,7 @@ install_supervisor() {
 create_laravel_queue_config() {
     echo " "
     echo "============================================="
-    echo "Creating Laravel queue worker configuration..."
+    echo -e "${GREEN}Creating Laravel queue worker configuration...${NC}"
     echo "============================================="
     
     # Define the supervisor config file path
@@ -2174,7 +2225,7 @@ EOF
 create_laravel_permission_helper() {
     echo " "
     echo "============================================="
-    echo "Creating Laravel permission helper script..."
+    echo -e "${GREEN}Creating Laravel permission helper script...${NC}"
     echo "============================================="
     
     # Create Laravel permission script
@@ -2236,7 +2287,7 @@ EOF
 setup_laravel_scheduler() {
     echo " "
     echo "============================================="
-    echo "Setting up Laravel scheduler cronjob..."
+    echo -e "${GREEN}Setting up Laravel scheduler cronjob...${NC}"
     echo "============================================="
     
     # Define the cron job command
@@ -2309,14 +2360,14 @@ setup_laravel_scheduler() {
 configure_firewall() {
     echo " "
     echo "============================================="
-    echo "Configuring UFW firewall with enhanced security..."
+    echo -e "${GREEN}Configuring UFW firewall with enhanced security...${NC}"
     echo "============================================="
 
     # Check if UFW is already installed
     if ! command -v ufw &> /dev/null; then
         echo " "
         echo "============================================="
-        echo "Installing UFW firewall..."
+        echo -e "${GREEN}Installing UFW firewall...${NC}"
         echo "============================================="
         sudo apt update
         sudo apt install -y ufw || {
@@ -2333,7 +2384,7 @@ configure_firewall() {
     # Reset to defaults (force to avoid prompts)
     echo " "
     echo "============================================="
-    echo "Resetting UFW to default configuration..."
+    echo -e "${GREEN}Resetting UFW to default configuration...${NC}"
     echo "============================================="
     echo "y" | sudo ufw --force reset || {
         error "Failed to reset UFW"
@@ -2343,7 +2394,7 @@ configure_firewall() {
     # Configure default policies
     echo " "
     echo "============================================="
-    echo "Setting default security policies..."
+    echo -e "${GREEN}Setting default security policies...${NC}"
     echo "============================================="
     sudo ufw default deny incoming || {
         error "Failed to set default deny incoming"
@@ -2357,7 +2408,7 @@ configure_firewall() {
     # Allow SSH with rate limiting (prevents brute force attacks)
     echo " "
     echo "============================================="
-    echo "Configuring SSH access with rate limiting..."
+    echo -e "${GREEN}Configuring SSH access with rate limiting...${NC}"
     echo "============================================="
     sudo ufw limit ssh/tcp || {
         error "Failed to configure SSH with rate limiting"
@@ -2371,7 +2422,7 @@ configure_firewall() {
     # Allow HTTP and HTTPS for web traffic
     echo " "
     echo "============================================="
-    echo "Configuring web server ports..."
+    echo -e "${GREEN}Configuring web server ports...${NC}"
     echo "============================================="
     sudo ufw allow 80/tcp || {
         error "Failed to allow HTTP port 80"
@@ -2385,14 +2436,14 @@ configure_firewall() {
     # Configure IPv6 support
     echo " "
     echo "============================================="
-    echo "Configuring IPv6 support..."
+    echo -e "${GREEN}Configuring IPv6 support...${NC}"
     echo "============================================="
     sudo sed -i 's/IPV6=no/IPV6=yes/' /etc/default/ufw 2>/dev/null || true
 
     # Enable UFW with force flag
     echo " "
     echo "============================================="
-    echo "Enabling UFW firewall..."
+    echo -e "${GREEN}Enabling UFW firewall...${NC}"
     echo "============================================="
     echo "y" | sudo ufw --force enable || {
         error "Failed to enable UFW"
@@ -2402,7 +2453,7 @@ configure_firewall() {
     # Verify configuration
     echo " "
     echo "============================================="
-    echo "Verifying Firewall configuration..."
+    echo -e "${GREEN}Verifying Firewall configuration...${NC}"
     echo "============================================="
     if sudo ufw status | grep -q "Status: active"; then
         echo " "
@@ -2424,7 +2475,7 @@ configure_firewall() {
         echo " • SSH (port 22) - Rate limited for security"
         echo " • SSH (port 80) - For web traffic"
         echo " • HTTPS (port 443) - For secure web traffic"
-        echo "  • All outgoing connections - Allowed by default"
+        echo " • All outgoing connections - Allowed by default"
         echo "============================================="
 
         warning "⚠️  Remember to open additional ports as needed for your applications"
@@ -2443,6 +2494,7 @@ configure_firewall() {
     info "• Monitor firewall logs in /var/log/ufw.log"
     info "• Use 'sudo ufw delete <rule_number>' to remove unwanted rules"
 
+    echo""
     log "✅ Firewall configuration completed successfully!"
 }
 
@@ -2453,7 +2505,7 @@ configure_firewall() {
 install_certbot() {
     echo "   "
     echo "============================================="
-    echo "Installing Certbot for SSL management"
+    echo -e "${GREEN}Installing Certbot for SSL management${NC}"
     echo "============================================="
     
     # Check if Certbot is already installed
@@ -2532,7 +2584,7 @@ install_certbot() {
 install_ssl() {
     echo "   "
     echo "============================================="
-    echo "Installing SSL certificate for ${DOMAIN_NAME}"
+    echo -e "${GREEN}Installing SSL certificate for ${DOMAIN_NAME}${NC}"
     echo "============================================="
     
     # Check if Certbot is installed
@@ -2579,7 +2631,7 @@ install_ssl() {
 verify_installation() {
     echo " "
     echo "============================================="
-    echo "Performing comprehensive system verification..."
+    echo -e "${GREEN}Performing comprehensive system verification...${NC}"
     echo "============================================="
     
     local errors=0
@@ -2747,15 +2799,22 @@ verify_installation() {
 
 # Display completion message and next steps
 show_completion_message() {
-    echo
-    echo -e "${CYAN}"
-    echo " :::===  :::  === :::      :::====  ::: :::=======  :::====  :::= ===      :::=======  ::: :::===  :::====  :::"
-    echo " :::     :::  === :::      :::  === ::: ::: === === :::  === :::=====      ::: === === ::: :::     :::  === :::"
-    echo "  =====  ===  === ===      ======== === === === === ======== ========      === === === ===  =====  =======  ==="
-    echo "     === ===  === ===      ===  === === ===     === ===  === === ====      ===     === ===     === === ===  ==="
-    echo " ======   ======  ======== ===  === === ===     === ===  === ===  ===      ===     === === ======  ===  === ==="
+    echo ""
+    echo -e "${GREEN}"
+    echo "███████╗██╗   ██╗ ██████╗ ██████╗███████╗███████╗███████╗"
+    echo "██╔════╝██║   ██║██╔════╝██╔════╝██╔════╝██╔════╝██╔════╝"
+    echo "███████╗██║   ██║██║     ██║     █████╗  ███████╗███████╗"
+    echo "╚════██║██║   ██║██║     ██║     ██╔══╝  ╚════██║╚════██║"
+    echo "███████║╚██████╔╝╚██████╗╚██████╗███████╗███████║███████║"
+    echo "╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝╚══════╝╚══════╝╚══════╝"
     echo -e "${NC}"
-    
+    echo ""
+    echo -e "${CYAN}🎉 S-LEMP Stack has been successfully installed! 🎉${NC}"
+    echo ""
+    echo -e "${YELLOW}═══════════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}Your Server is now ready for production!${NC}"
+    echo -e "${YELLOW}═══════════════════════════════════════════════════════${NC}"
+    echo ""
 }
 
 
@@ -2764,14 +2823,16 @@ main() {
     # Create lock file to prevent concurrent runs
     create_lock
 
+    # Show S-LEMP banner for all modes
+    show_slemp_banner
+
     # check_root
     check_ubuntu
 
     # Show welcome message
     if [[ $INTERACTIVE_MODE == true ]]; then
-        echo ""
         echo "============================================="
-        echo -e "${GREEN}WELCOME TO S-LEMP STACK INSTALLER${NC}"
+        echo -e "${GREEN}WELCOME TO S-LEMP INSTALLER${NC}"
         echo "============================================="
         echo ""
         echo -e "${CYAN}This script will install and configure:${NC}"
@@ -2912,34 +2973,48 @@ main() {
     # Run comprehensive verification
     echo " "
     echo "============================================="
-    echo "Running final system verification..."
+    echo -e "${GREEN}Running final system verification...${NC}"
     echo "============================================="
     
     if verify_installation; then
-        log "LEMP stack installation completed successfully!"
         echo " "
         echo "============================================="
         echo "Next Steps:"
         echo "============================================="
-        info "- Your LEMP stack is ready for Laravel development"
+        info "- Go to your project folder inside the ${PROJECT_ROOT}/${PROJECT_NAME} and read the further instruction for deploying your laravel app using GIT."
+        info "- If you already know what to do, you can delete all the files inside your project folder and continue clone your project using GIT."
         info "- Deploy your Laravel project: git clone <repository> ${PROJECT_ROOT}/${PROJECT_NAME}"
         info "- Permissions are automatically set for Laravel structure"
         info "- Use 'fix-laravel-permissions ${PROJECT_ROOT}/${PROJECT_NAME}' if needed"
         info "- Configure your domain DNS to point to this server"
         echo ""
-        info "SSL Certificate Setup (Manual):"
-        info "   Certbot is installed and ready for SSL certificate generation"
-        info "   After your domain is properly configured and accessible:"
-        info "   1. Test domain accessibility: curl -I http://${DOMAIN_NAME}"
-        info "   2. Install SSL certificate: sudo certbot --nginx -d ${DOMAIN_NAME} --email ${SSL_EMAIL} --agree-tos"
-        info "   3. Verify SSL: curl -I https://${DOMAIN_NAME}"
-        info "   - SSL email is pre-configured: ${SSL_EMAIL}"
-        info "   - After SSL setup, access your site: https://${DOMAIN_NAME}"
-        info "   - Without SSL, access your site: http://${DOMAIN_NAME}"
+        info "⚠️  Important: Supervisor Queue Workers"
+        info "- Queue workers will show 'FATAL' errors until Laravel is deployed"
+        info "- After deploying Laravel, restart Supervisor: sudo supervisorctl restart all"
+        info "- Check status with: sudo supervisorctl status"
+        echo ""
+        
+        echo "SSL Certificate Setup (Manual):"
+        info "Certbot is installed and ready for SSL certificate generation"
+        info "After your domain is properly configured and accessible:"
+        info "1. Test domain accessibility: curl -I http://${DOMAIN_NAME}"
+        info "2. Install SSL certificate: sudo certbot --nginx -d ${DOMAIN_NAME} --email ${SSL_EMAIL} --agree-tos"
+        info "3. Verify SSL: curl -I https://${DOMAIN_NAME}"
+
         echo " "
-        info "Access your server:"
-        info "- Web: http://$(curl -s ifconfig.me 2>/dev/null || echo 'your-server-ip')"
-        info "- SSH: ssh $(whoami)@$(curl -s ifconfig.me 2>/dev/null || echo 'your-server-ip')"
+        echo " "
+
+        echo "============================================="
+        echo "Advertisement"
+        echo "============================================="
+        info "- If you need any help with Laravel development, feel free to reach out to me for freelance services."
+        info "- I offer expert assistance to ensure your Laravel projects run smoothly and efficiently."
+        info "- Contact me at saya@sulaimanmisri.com"
+        info "- Visit my website at https://sulaimanmisri.com"
+        info "- PM me on Facebook at https://www.fb.com/designcarasaya"
+        info "- Or Whatsapp me at https://wa.me/60145777229"
+
+        echo " "
         
         # Show the completion message with ASCII art
         show_completion_message

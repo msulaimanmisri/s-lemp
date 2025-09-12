@@ -7,8 +7,8 @@
 # @web https://sulaimanmisri.com
 
 # Remove strict error handling for more graceful cleanup
-# set -Eeuo pipefail
-# trap 'echo "[ERROR] Line $LINENO exited with status $?" >&2' ERR
+set -Eeuo pipefail
+trap 'echo "[ERROR] Line $LINENO exited with status $?" >&2' ERR
 
 # =================================================================================
 # GLOBAL VARIABLES
