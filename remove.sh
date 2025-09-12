@@ -61,19 +61,46 @@ safe_stop_service() {
     fi
 }
 
+# Function to wait for apt locks to be released
+wait_for_apt_lock() {
+    local timeout=300  # 5 minutes timeout
+    local elapsed=0
+    
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/lib/dpkg/lock >/dev/null 2>&1; do
+        if [ $elapsed -ge $timeout ]; then
+            warning "Timeout waiting for apt lock, forcing cleanup..."
+            sudo killall apt apt-get dpkg 2>/dev/null || true
+            sleep 5
+            break
+        fi
+        echo "Waiting for package manager lock... ($elapsed/$timeout seconds)"
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+}
+
 # Function to safely remove packages
 safe_remove_packages() {
     local packages=("$@")
     echo "Removing packages: ${packages[*]}"
 
+    # Wait for any existing locks to be released
+    wait_for_apt_lock
+
+    # Kill any hanging processes
+    sudo killall apt apt-get 2>/dev/null || true
+    sleep 2
+
     # First, try to fix any broken packages
     sudo dpkg --configure -a || warning "Failed to configure packages"
+    wait_for_apt_lock
     sudo apt-get -f install -y || warning "Failed to fix broken dependencies"
 
     for package in "${packages[@]}"; do
-        if dpkg -l | grep -q "^ii.*$package"; then
+        if dpkg -l 2>/dev/null | grep -q "^ii.*$package" 2>/dev/null; then
             echo "Removing $package..."
-            sudo apt-get remove --purge -y "$package" || warning "Failed to remove $package"
+            wait_for_apt_lock
+            sudo apt-get remove --purge -y "$package" 2>/dev/null || warning "Failed to remove $package"
         else
             log "$package is not installed"
         fi
@@ -170,6 +197,18 @@ echo " "
 echo "============================================="
 echo "Step 1: Stopping ALL services first"
 echo "============================================="
+
+# First, wait for any apt locks and kill hanging processes
+wait_for_apt_lock
+sudo killall apt apt-get dpkg 2>/dev/null || true
+sleep 3
+
+# Fix any broken packages before stopping services
+log "Fixing any broken package installations..."
+sudo dpkg --configure -a || warning "Some packages may still have issues"
+wait_for_apt_lock
+sudo apt-get -f install -y || warning "Failed to fix some dependencies"
+
 safe_stop_service "nginx"
 safe_stop_service "php${PHP_VERSION}-fpm"
 safe_stop_service "php8.4-fpm"
@@ -192,9 +231,12 @@ echo "============================================="
 echo "Step 2: Removing PHP and ALL related extensions"
 echo "============================================="
 # Remove ALL PHP versions and extensions (including held packages)
+wait_for_apt_lock
 sudo apt-get purge --allow-change-held-packages -y 'php*' 'libapache2-mod-php*'
 # Remove any remaining config files and dependencies
+wait_for_apt_lock
 sudo apt-get autoremove --purge -y
+wait_for_apt_lock
 sudo apt-get autoclean
 # Remove PHP directories (be careful!)
 sudo rm -rf /etc/php /var/log/php /run/php /usr/lib/php* /usr/share/php*
@@ -254,10 +296,11 @@ safe_remove_packages "apache2" "apache2-bin" "apache2-utils" "libapache2-mod-*"
 # Additional thorough Apache removal
 log "Performing thorough Apache removal..."
 # Get all installed packages containing 'apache' and remove them
-apache_packages=$(dpkg -l | grep -i apache | awk '{print $2}' | tr '\n' ' ')
-if [[ -n "$apache_packages" ]]; then
+apache_packages=$(dpkg -l 2>/dev/null | grep -i apache | awk '{print $2}' | tr '\n' ' ' 2>/dev/null || true)
+if [[ -n "$apache_packages" && "$apache_packages" != " " ]]; then
     echo "Found additional Apache packages: $apache_packages"
-    sudo apt-get remove --purge -y $apache_packages || warning "Failed to remove some Apache packages"
+    wait_for_apt_lock
+    sudo apt-get remove --purge -y $apache_packages 2>/dev/null || warning "Failed to remove some Apache packages"
 else
     log "No additional Apache packages found"
 fi
@@ -274,12 +317,17 @@ echo "============================================="
 echo "Step 10: Removing configuration files and directories"
 echo "============================================="
 log "Removing Composer..."
+wait_for_apt_lock
 sudo rm -f /usr/local/bin/composer
 sudo rm -f /usr/local/bin/composer
 sudo rm -f /usr/bin/composer
-rm -f composer.phar
-rm -f composer-setup.php
-sudo apt remove --purge composer -y 2>/dev/null || true
+rm -f composer.phar 2>/dev/null || true
+rm -f composer-setup.php 2>/dev/null || true
+# Only try to remove composer package if it exists
+if dpkg -l 2>/dev/null | grep -q "^ii.*composer" 2>/dev/null; then
+    wait_for_apt_lock
+    sudo apt remove --purge composer -y 2>/dev/null || true
+fi
 
 log "Removing SSL certificates..."
 sudo rm -rf /etc/letsencrypt
@@ -465,15 +513,20 @@ echo "============================================="
 echo "Step 16: Final system verification and cleanup"
 echo "============================================="
 log "Removing any leftover packages..."
+wait_for_apt_lock
 sudo apt-get autoremove --purge -y
+wait_for_apt_lock
 sudo apt-get autoclean
+wait_for_apt_lock
 sudo apt-get clean
 
 log "Fixing any broken packages..."
 sudo dpkg --configure -a || warning "Some packages may still have issues"
+wait_for_apt_lock
 sudo apt-get -f install -y || warning "Failed to fix some dependencies"
 
 log "Updating package database..."
+wait_for_apt_lock
 sudo apt-get update || warning "Failed to update package database"
 
 log "Verifying complete removal..."
@@ -481,58 +534,64 @@ log "Verifying complete removal..."
 log "Performing final cleanup of any remaining packages..."
 
 # Remove any remaining apache packages
-remaining_apache=$(dpkg -l | awk '$1 == "ii" && $2 ~ /apache/ {print $2}' | tr '\n' ' ')
-if [[ -n "$remaining_apache" ]]; then
+remaining_apache=$(dpkg -l 2>/dev/null | awk '$1 == "ii" && $2 ~ /apache/ {print $2}' | tr '\n' ' ' 2>/dev/null || true)
+if [[ -n "$remaining_apache" && "$remaining_apache" != " " ]]; then
     log "Removing remaining Apache packages: $remaining_apache"
-    sudo apt-get remove --purge -y $remaining_apache || warning "Failed to remove remaining Apache packages"
+    wait_for_apt_lock
+    sudo apt-get remove --purge -y $remaining_apache 2>/dev/null || warning "Failed to remove remaining Apache packages"
 fi
 
 # Remove any remaining php packages
-remaining_php=$(dpkg -l | awk '$1 == "ii" && $2 ~ /^php/ {print $2}' | tr '\n' ' ')
-if [[ -n "$remaining_php" ]]; then
+remaining_php=$(dpkg -l 2>/dev/null | awk '$1 == "ii" && $2 ~ /^php/ {print $2}' | tr '\n' ' ' 2>/dev/null || true)
+if [[ -n "$remaining_php" && "$remaining_php" != " " ]]; then
     log "Removing remaining PHP packages: $remaining_php"
-    sudo apt-get remove --purge -y $remaining_php || warning "Failed to remove remaining PHP packages"
+    wait_for_apt_lock
+    sudo apt-get remove --purge -y $remaining_php 2>/dev/null || warning "Failed to remove remaining PHP packages"
 fi
 
 # Remove any remaining nginx packages
-remaining_nginx=$(dpkg -l | awk '$1 == "ii" && $2 ~ /nginx/ {print $2}' | tr '\n' ' ')
-if [[ -n "$remaining_nginx" ]]; then
+remaining_nginx=$(dpkg -l 2>/dev/null | awk '$1 == "ii" && $2 ~ /nginx/ {print $2}' | tr '\n' ' ' 2>/dev/null || true)
+if [[ -n "$remaining_nginx" && "$remaining_nginx" != " " ]]; then
     log "Removing remaining Nginx packages: $remaining_nginx"
-    sudo apt-get remove --purge -y $remaining_nginx || warning "Failed to remove remaining Nginx packages"
+    wait_for_apt_lock
+    sudo apt-get remove --purge -y $remaining_nginx 2>/dev/null || warning "Failed to remove remaining Nginx packages"
 fi
 
 # Remove any remaining database packages
-remaining_db=$(dpkg -l | awk '$1 == "ii" && ($2 ~ /mariadb/ || $2 ~ /mysql/) {print $2}' | tr '\n' ' ')
-if [[ -n "$remaining_db" ]]; then
+remaining_db=$(dpkg -l 2>/dev/null | awk '$1 == "ii" && ($2 ~ /mariadb/ || $2 ~ /mysql/) {print $2}' | tr '\n' ' ' 2>/dev/null || true)
+if [[ -n "$remaining_db" && "$remaining_db" != " " ]]; then
     log "Removing remaining database packages: $remaining_db"
-    sudo apt-get remove --purge -y $remaining_db || warning "Failed to remove remaining database packages"
+    wait_for_apt_lock
+    sudo apt-get remove --purge -y $remaining_db 2>/dev/null || warning "Failed to remove remaining database packages"
 fi
 
 # Final autoremove and autoclean
+wait_for_apt_lock
 sudo apt-get autoremove --purge -y
+wait_for_apt_lock
 sudo apt-get autoclean
 
 # Check if any LEMP components are still installed
 remaining_packages=""
-if dpkg -l | awk '$1 == "ii" && $2 ~ /nginx/ {print $2}' | grep -q .; then
+if dpkg -l 2>/dev/null | awk '$1 == "ii" && $2 ~ /nginx/ {print $2}' | grep -q . 2>/dev/null; then
     remaining_packages="$remaining_packages nginx"
 fi
-if dpkg -l | awk '$1 == "ii" && $2 ~ /php/ {print $2}' | grep -q .; then
+if dpkg -l 2>/dev/null | awk '$1 == "ii" && $2 ~ /php/ {print $2}' | grep -q . 2>/dev/null; then
     remaining_packages="$remaining_packages php"
 fi
-if dpkg -l | awk '$1 == "ii" && ($2 ~ /mariadb/ || $2 ~ /mysql/) {print $2}' | grep -q .; then
+if dpkg -l 2>/dev/null | awk '$1 == "ii" && ($2 ~ /mariadb/ || $2 ~ /mysql/) {print $2}' | grep -q . 2>/dev/null; then
     remaining_packages="$remaining_packages mariadb/mysql"
 fi
-if dpkg -l | awk '$1 == "ii" && $2 ~ /redis/ {print $2}' | grep -q .; then
+if dpkg -l 2>/dev/null | awk '$1 == "ii" && $2 ~ /redis/ {print $2}' | grep -q . 2>/dev/null; then
     remaining_packages="$remaining_packages redis"
 fi
-if dpkg -l | awk '$1 == "ii" && $2 ~ /supervisor/ {print $2}' | grep -q .; then
+if dpkg -l 2>/dev/null | awk '$1 == "ii" && $2 ~ /supervisor/ {print $2}' | grep -q . 2>/dev/null; then
     remaining_packages="$remaining_packages supervisor"
 fi
-if dpkg -l | awk '$1 == "ii" && $2 ~ /apache/ {print $2}' | grep -q .; then
+if dpkg -l 2>/dev/null | awk '$1 == "ii" && $2 ~ /apache/ {print $2}' | grep -q . 2>/dev/null; then
     remaining_packages="$remaining_packages apache"
 fi
-if dpkg -l | awk '$1 == "ii" && $2 ~ /nodejs/ {print $2}' | grep -q .; then
+if dpkg -l 2>/dev/null | awk '$1 == "ii" && $2 ~ /nodejs/ {print $2}' | grep -q . 2>/dev/null; then
     remaining_packages="$remaining_packages nodejs"
 fi
 

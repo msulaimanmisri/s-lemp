@@ -2,6 +2,8 @@
 
 A complete, production-ready LEMP (Linux, Nginx, MariaDB, PHP) stack installation and removal script specifically optimized for Laravel applications on Ubuntu servers.
 
+![S-LEMP-THUMBNAIL](S-LEMP.png)
+
 ## 📋 Table of Contents
 
 - [Overview](#-overview)
@@ -78,6 +80,18 @@ The broader goals include:
 - **Privileges**: Root access (sudo)
 
 ## ⚡ Quick Installation
+
+### Fix Any Existing Issues First (If Needed)
+
+If you encounter dpkg lock errors or package management issues, use the removal script to clean up:
+
+```bash
+# Run the removal script to clean up any package issues
+sudo bash remove.sh
+
+# Then run the installation
+sudo bash install.sh
+```
 
 ### Method 1: Direct Download and Execute
 
@@ -300,6 +314,26 @@ The removal script completely removes:
 - Make sure to backup any important data before removal
 
 ## 🔧 Troubleshooting
+
+### DPKG and Package Management Issues
+
+**dpkg was interrupted error**:
+```bash
+# Use the removal script to clean up package issues
+sudo bash remove.sh
+
+# Or manually fix:
+sudo killall apt apt-get dpkg
+sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock
+sudo dpkg --configure -a
+sudo apt-get -f install -y
+```
+
+**Another process is using apt**:
+```bash
+# Run the removal script which handles this automatically:
+sudo bash remove.sh
+```
 
 ### Common Issues
 

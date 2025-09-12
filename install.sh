@@ -12,6 +12,7 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --non-interactive|-n)
             INTERACTIVE_MODE=false
+
             # Set default values for non-interactive mode
             PROJECT_NAME="laravel-project"
             DOMAIN_NAME="laravel.local"
@@ -21,11 +22,12 @@ while [[ $# -gt 0 ]]; do
             DB_ROOT_PASSWORD=$(openssl rand -base64 16 2>/dev/null || echo "rootpass123")
             REDIS_PASSWORD=$(openssl rand -base64 12 2>/dev/null || echo "redispass123")
             SSL_EMAIL="admin@laravel.local"
-            PHP_VERSION="8.3"  # Default to PHP 8.3 LTS for non-interactive mode
-            QUEUE_DRIVER="database"  # Default to Database for non-interactive mode (beginner-friendly)
-            INSTALL_SSL=false  # Default to manual SSL installation for non-interactive mode
+            PHP_VERSION="8.3"
+            QUEUE_DRIVER="database"
+            INSTALL_SSL=false 
             shift
             ;;
+    
         --php-version)
             if [[ "$2" == "8.3" ]] || [[ "$2" == "8.4" ]]; then
                 PHP_VERSION="$2"
@@ -35,6 +37,7 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             ;;
+
         --queue-driver)
             if [[ "$2" == "redis" ]] || [[ "$2" == "database" ]]; then
                 QUEUE_DRIVER="$2"
@@ -44,27 +47,32 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             ;;
+
         --help|-h)
             echo "S-LEMP Stack Installation Script"
             echo ""
             echo "Usage: $0 [OPTIONS]"
             echo ""
+
             echo "Options:"
             echo "  --non-interactive, -n       Run in non-interactive mode with defaults"
             echo "  --php-version VERSION       Set PHP version (8.3 or 8.4)"
             echo "  --queue-driver DRIVER       Set queue driver (redis or database)"
             echo "  --help, -h                  Show this help message"
             echo ""
+
             echo "Examples:"
             echo "  $0                          # Interactive mode"
             echo "  $0 --non-interactive        # Non-interactive with PHP 8.3 and Redis"
             echo "  $0 --non-interactive --php-version 8.4 --queue-driver database"
             echo ""
+
             echo "Interactive mode (default): Run configuration wizard"
             echo "Non-interactive mode: Use predefined defaults"
             exit 0
             ;;
         *)
+
             echo "Unknown option: $1"
             echo "Use --help for usage information"
             exit 1
@@ -77,6 +85,28 @@ done
 # =========================================================================
 set -Eeuo pipefail
 
+# Function to wait for apt locks to be released
+wait_for_apt_lock() {
+    local timeout=300
+    local elapsed=0
+    
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/lib/dpkg/lock >/dev/null 2>&1 || fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
+        if [ $elapsed -ge $timeout ]; then
+            warning "Timeout waiting for apt lock, forcing cleanup..."
+            sudo killall apt apt-get dpkg 2>/dev/null || true
+            sleep 5
+
+            # Remove lock files as last resort
+            sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null || true
+            break
+        fi
+
+        echo "Waiting for package manager lock... ($elapsed/$timeout seconds)"
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+}
+
 # Custom error handler with cleanup
 cleanup_on_error() {
     local exit_code=$?
@@ -86,16 +116,22 @@ cleanup_on_error() {
     # Attempt basic cleanup
     warning "Attempting to clean up partial installation..."
     
+    # Kill any hanging package management processes
+    sudo killall apt apt-get dpkg 2>/dev/null || true
+    sleep 3
+    
+    # Try to fix broken packages
+    sudo dpkg --configure -a 2>/dev/null || true
+    
+    # Clean up any package locks
+    sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null || true
+    
     # Stop any services that might be in inconsistent state
     for service in nginx php${PHP_VERSION}-fpm mariadb redis-server supervisor; do
         if systemctl is-active --quiet $service 2>/dev/null; then
-            systemctl stop $service 2>/dev/null || true
+            sudo systemctl stop $service 2>/dev/null || true
         fi
     done
-    
-    # Clean up any package locks
-    killall apt apt-get 2>/dev/null || true
-    rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock 2>/dev/null || true
     
     info "Cleanup completed. Check the error above and rerun the script."
     exit $exit_code
@@ -111,6 +147,7 @@ LOCK_FILE="/tmp/lemp_install.lock"
 cleanup_lock() {
     rm -f "$LOCK_FILE"
 }
+
 trap cleanup_lock EXIT
 
 # Create lock to prevent concurrent installations
@@ -125,7 +162,7 @@ create_lock() {
 }
 
 # =================================================================================
-# GLOBAL VARIABLES (will be set by configuration wizard)
+# GLOBAL VARIABLES
 # =================================================================================
 PROJECT_ROOT="/var/www"
 PROJECT_NAME=""
@@ -152,7 +189,6 @@ INTERACTIVE_MODE=true
 INSTALL_SSL=false
 SSL_INSTALL_SUCCESS=false
 
-
 # =========================================================================
 # Colors for output
 # =========================================================================
@@ -163,8 +199,7 @@ BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 WHITE='\033[1;37m'
-NC='\033[0m' # No Color
-
+NC='\033[0m'
 
 # =========================================================================
 # Logging Functions
@@ -211,6 +246,7 @@ show_progress() {
 # Function to validate domain format
 validate_domain() {
     local domain="$1"
+
     # Basic domain validation - allows letters, numbers, dots, and hyphens
     if [[ $domain =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]$ ]] && [[ $domain =~ \. ]]; then
         return 0
@@ -222,6 +258,7 @@ validate_domain() {
 # Function to validate project name (safe for filesystem)
 validate_project_name() {
     local name="$1"
+
     # Only allow letters, numbers, hyphens, and underscores
     if [[ $name =~ ^[a-zA-Z0-9_-]+$ ]] && [[ ${#name} -ge 3 ]] && [[ ${#name} -le 50 ]]; then
         return 0
@@ -233,6 +270,7 @@ validate_project_name() {
 # Function to validate email format
 validate_email() {
     local email="$1"
+
     if [[ $email =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
         return 0
     else
@@ -326,7 +364,7 @@ show_slemp_banner() {
     echo ""
 }
 
-# Function to display configuration wizard header (no clear)
+# Function to display configuration wizard header
 show_config_wizard_header() {
     echo ""
     echo "============================================="
@@ -946,19 +984,23 @@ update_and_install_core_system() {
     echo "============================================="
     echo ""
     
-    # Kill any apt processes that might be hanging
-    sudo killall apt apt-get 2>/dev/null || true
-    sleep 2
+    # Initial cleanup and wait for locks
+    sudo killall apt apt-get dpkg 2>/dev/null || true
+    sleep 3
     
-    # Wait for apt locks to be released
-    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-        warning "Waiting for other package managers to finish..."
-        sleep 5
-    done
+    # Wait for any existing locks to be released
+    wait_for_apt_lock
+    
+    # Fix any broken packages first
+    info "Fixing any broken packages..."
+    sudo dpkg --configure -a || warning "Some packages may still have issues"
+    wait_for_apt_lock
+    sudo apt-get -f install -y || warning "Failed to fix some dependencies"
     
     # Update package lists with retries
     local retries=3
     for ((i=1; i<=retries; i++)); do
+        wait_for_apt_lock
         if sudo apt update; then
             log "✓ Package lists updated successfully"
             break
@@ -975,6 +1017,7 @@ update_and_install_core_system() {
     
     # Upgrade system packages
     info "Upgrading system packages (this may take a while)..."
+    wait_for_apt_lock
     if sudo DEBIAN_FRONTEND=noninteractive apt upgrade -y; then
         log "✓ System packages upgraded successfully"
     else
@@ -987,6 +1030,7 @@ update_and_install_core_system() {
     echo "============================================="
     echo ""
     
+    wait_for_apt_lock
     sudo apt install -y curl wget git unzip software-properties-common apt-transport-https ca-certificates gnupg lsb-release bc
 }
 
@@ -1000,6 +1044,7 @@ install_nginx() {
     echo "============================================="
     echo ""
     
+    wait_for_apt_lock
     sudo apt install -y nginx
     
     echo ""
@@ -2822,6 +2867,31 @@ show_completion_message() {
 main() {
     # Create lock file to prevent concurrent runs
     create_lock
+
+    # Pre-installation system check and cleanup
+    echo ""
+    echo "============================================="
+    echo -e "${GREEN}🔧 PRE-INSTALLATION SYSTEM CHECK${NC}"
+    echo "============================================="
+    echo ""
+    
+    # Kill any hanging processes first
+    info "Checking for hanging package management processes..."
+    sudo killall apt apt-get dpkg 2>/dev/null || true
+    sleep 3
+    
+    # Fix any broken dpkg state
+    info "Checking dpkg state and fixing any issues..."
+    if ! sudo dpkg --configure -a; then
+        warning "Found dpkg issues, attempting to fix..."
+        wait_for_apt_lock
+        sudo apt-get -f install -y || warning "Some issues may persist"
+    fi
+    
+    # Wait for any locks and clean up
+    wait_for_apt_lock
+    
+    log "✓ System check completed successfully"
 
     # Show S-LEMP banner for all modes
     show_slemp_banner
