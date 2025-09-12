@@ -4,19 +4,19 @@ A complete, production-ready LEMP (Linux, Nginx, MariaDB, PHP) stack installatio
 
 ## 📋 Table of Contents
 
-- [Overview](#overview)
-- [About](#about)
-- [Features](#features)
-- [System Requirements](#system-requirements)
-- [Quick Installation](#quick-installation)
-- [Installation Options](#installation-options)
-- [What Gets Installed](#what-gets-installed)
-- [Important Notes](#important-notes)
-- [Post-Installation](#post-installation)
-- [Complete Removal](#complete-removal)
-- [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
-- [License](#license)
+- [Overview](#-overview)
+- [About](#-about)
+- [Features](#-features)
+- [System Requirements](#-system-requirements)
+- [Quick Installation](#-quick-installation)
+- [Installation Options](#-installation-options)
+- [What Gets Installed](#-what-gets-installed)
+- [Important Notes](#-important-notes)
+- [Post-Installation](#-post-installation)
+- [Complete Removal](#-complete-removal)
+- [Troubleshooting](#-troubleshooting)
+- [Contributing](#-contributing)
+- [License](#-license)
 
 ## 🚀 Overview
 
