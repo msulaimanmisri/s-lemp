@@ -1,49 +1,18 @@
 # S-LEMP Stack Installation Scripts for Ubuntu
-
 A complete, production-ready LEMP (Linux, Nginx, MariaDB, PHP) stack installation and removal script specifically optimized for Laravel applications on Ubuntu servers.
 
 ![S-LEMP-THUMBNAIL](S-LEMP.png)
 
-## 📋 Table of Contents
-
-- [Overview](#-overview)
-- [About](#-about)
-- [Features](#-features)
-- [System Requirements](#-system-requirements)
-- [Quick Installation](#-quick-installation)
-- [Installation Options](#-installation-options)
-- [What Gets Installed](#-what-gets-installed)
-- [Important Notes](#-important-notes)
-- [Post-Installation](#-post-installation)
-- [Complete Removal](#-complete-removal)
-- [Troubleshooting](#-troubleshooting)
-- [Contributing](#-contributing)
-- [License](#-license)
-
 ## 🚀 Overview
-
-This project provides automated installation and removal scripts for setting up a complete LEMP stack optimized for Laravel development and production environments. The scripts handle all the complex configuration, security settings, and optimizations needed for a robust Laravel hosting environment.
+This project provides automated installation and removal scripts for setting up a complete LEMP stack optimized for Laravel development and production environments. The scripts handle complex configuration, security settings, and optimizations needed for a robust Laravel hosting environment.
 
 ## 👨‍💻 About
+This project was created to solve a problem Sulaiman (the author) and his team repeatedly faced: As developers who don't have a large team to handle Laravel application deployment, how can we simplify and speed up the process of setting up a secure, optimized server environment for Laravel so we can focus on code and technical discussion?
 
-This S-LEMP stack installation script was created by **Sulaiman Misri**, a passionate full-stack developer and DevOps enthusiast. With years of experience in Laravel development and server administration, this project aims to simplify the process of setting up production-ready Laravel hosting environments.
-
-### Author Information
-
-- **Name**: Muhamad Sulaiman Misri
-- **Website**: [https://sulaimanmisri.com](https://sulaimanmisri.com)
-- **Expertise**: Full-Stack Development, DevOps, Automation, Cloud Infrastructure, Software Architecture
-- **Current Role**: Senior Full-Stack Developer at UEM Sunrise Sdn Bhd
-
-### Project Goals
-
-This project was born from the idea of wanting:
-
+## This project is driven by these goals:
 1. **Fast Installation for Laravel Applications**: Streamlined, automated setup that gets Laravel environments running quickly without manual configuration
-2. **Optimized for Laravel**: Pre-configured settings, extensions, and performance tuning specifically tailored for Laravel's requirements
 
 The broader goals include:
-
 - **Ease of Use**: Simple installation process for developers of all levels
 - **Production Ready**: Enterprise-grade security and performance optimizations
 - **Flexibility**: Support for different configurations and use cases
@@ -51,12 +20,11 @@ The broader goals include:
 - **Open Source**: Community-driven development and continuous improvement
 
 ## ✨ Features
-
 ### Installation Script (`install.sh`)
 - **Interactive Configuration Wizard** - Guided setup with validation
 - **Non-Interactive Mode** - Perfect for automation and CI/CD
 - **Multiple PHP Versions** - Support for PHP 8.3 LTS and PHP 8.4
-- **Queue Management** - Redis or Database queue drivers with Supervisor
+- **Queue Management** - Redis or database queue drivers with Supervisor
 - **Security Optimized** - Firewall, secure passwords, and hardened configurations
 - **SSL Ready** - Certbot integration for Let's Encrypt certificates
 - **Performance Tuned** - OPcache, Redis caching, and Laravel optimizations
@@ -71,18 +39,14 @@ The broader goals include:
 - **Service Management** - Properly stops and disables all services
 
 ## 💻 System Requirements
-
-- **Operating System**: Ubuntu 20.04 LTS, 22.04 LTS, or 24.04 LTS
-- **Architecture**: x86_64 (amd64)
-- **Memory**: Minimum 1GB RAM (2GB+ recommended)
+- **Operating System**: Ubuntu 22.04 LTS or 24.04 LTS
+- **Memory**: Minimum 1GB RAM (2GB+ recommended for Laravel applications)
 - **Storage**: At least 10GB free space
 - **Network**: Internet connection for package downloads
 - **Privileges**: Root access (sudo)
 
 ## ⚡ Quick Installation
-
 ### Fix Any Existing Issues First (If Needed)
-
 If you encounter dpkg lock errors or package management issues, use the removal script to clean up:
 
 ```bash
@@ -131,50 +95,27 @@ sudo ./install.sh --non-interactive --php-version 8.4 --queue-driver redis
 ### Command Line Arguments
 
 | Option | Description | Values | Default |
-|--------|-------------|---------|---------|
+|--------|-------------|--------|---------|
 | `--non-interactive`, `-n` | Run without prompts using defaults | - | Interactive mode |
 | `--php-version` | Choose PHP version | `8.3`, `8.4` | `8.3` |
 | `--queue-driver` | Select queue backend | `database`, `redis` | `database` |
 | `--help`, `-h` | Show help information | - | - |
 
 ### Interactive Mode Configuration
-
-When running in interactive mode, you'll be prompted to configure:
-
-1. **Project Settings**
-   - Project name (alphanumeric, 3-50 characters)
-   - Domain name (valid domain format)
-   - SSL email address
-
-2. **Database Configuration**
-   - Database name, username, and password
-   - MariaDB root password
-   - Automatic secure password generation option
-
-3. **Redis Configuration**
-   - Redis authentication password
-   - Automatic secure password generation option
-
-4. **Advanced Settings**
-   - PHP version selection (8.3 LTS or 8.4)
-   - Queue driver (Database or Redis)
-   - Number of queue worker processes (1-20)
+You will be prompted to enter some information. Press Enter to accept the default values shown in brackets.
 
 ## 📦 What Gets Installed
-
 ### Core Components
-
 - **Nginx** - High-performance web server with optimized configuration
 - **MariaDB** - Database server with secure installation
 - **PHP** - Version 8.3 or 8.4 with essential Laravel extensions
-- **Redis** - In-memory data structure store for caching and queues
+- **Redis** - In-memory data store for caching and queues
 - **Node.js** - Latest LTS version for frontend asset compilation
 - **Composer** - PHP dependency manager
 - **Supervisor** - Process manager for Laravel queue workers
 - **Certbot** - SSL certificate management
 
 ### PHP Extensions
-
 Essential extensions for Laravel development:
 - `php-fpm`, `php-mysql`, `php-redis`, `php-xml`, `php-zip`
 - `php-curl`, `php-mbstring`, `php-gd`, `php-imagick`
@@ -182,7 +123,6 @@ Essential extensions for Laravel development:
 - `php-common`, `php-json`, `php-opcache`, `php-cli`
 
 ### Security & Performance Features
-
 - **UFW Firewall** - Configured with appropriate rules
 - **OPcache** - PHP bytecode caching for performance
 - **Security Headers** - Nginx security configuration
@@ -191,22 +131,17 @@ Essential extensions for Laravel development:
 - **Log Management** - Centralized logging configuration
 
 ### Helper Scripts
-
 - `fix-laravel-permissions` - Laravel permission management utility
 - Laravel scheduler cron job setup
 - Project deployment templates
 
 ## ⚠️ Important Notes
-
 ### Before Installation
-
-1. **Backup Your Data** - This script makes system-wide changes
-2. **Fresh Server Recommended** - Best used on clean Ubuntu installations
-3. **Domain Configuration** - Have your domain DNS ready if using SSL
-4. **Root Access Required** - Script must be run with sudo privileges
+1. **Fresh Server Recommended** - Best used on clean Ubuntu installations
+2. **Domain Configuration** - Have your domain DNS ready if using SSL
+3. **Root Access Required** - Script must be run with sudo privileges
 
 ### Security Considerations
-
 - All passwords are generated securely using `/dev/urandom` or OpenSSL
 - MariaDB is installed with secure defaults (no anonymous users, no test database)
 - Redis is configured with authentication
@@ -214,7 +149,6 @@ Essential extensions for Laravel development:
 - UFW firewall is enabled with minimal required ports
 
 ### SSL Certificate Setup
-
 The script installs Certbot but **does not automatically generate SSL certificates**. After installation:
 
 1. Ensure your domain points to your server's IP
@@ -222,9 +156,7 @@ The script installs Certbot but **does not automatically generate SSL certificat
 3. Generate SSL certificate: `sudo certbot --nginx -d yourdomain.com`
 
 ## 🔄 Post-Installation
-
 ### Deploy Your Laravel Application (This is only a guide; Laravel deployment is not automated)
-
 1. **Clone your project**:
    ```bash
    cd /var/www/your-project-name
@@ -255,14 +187,12 @@ The script installs Certbot but **does not automatically generate SSL certificat
    ```
 
 ### Access Your Application
-
 - **HTTP**: `http://your-domain.com` or `http://your-server-ip`
 - **HTTPS**: `https://your-domain.com` (after SSL setup)
 
 ### Useful Commands
-
 ```bash
-# Check service status
+# Check service status (adjust php version as needed)
 sudo systemctl status nginx php8.3-fpm mariadb redis-server supervisor
 
 # View logs
@@ -280,7 +210,6 @@ fix-laravel-permissions /var/www/your-project
 ```
 
 ## 🗑️ Complete Removal
-
 ### Quick Removal
 
 ```bash
@@ -293,9 +222,7 @@ sudo ./remove.sh
 ```
 
 ### What Gets Removed
-
 The removal script completely removes:
-
 - All LEMP stack components (Nginx, PHP, MariaDB, Redis)
 - All configuration files and directories
 - All databases and data (**PERMANENTLY DELETED**)
@@ -306,17 +233,14 @@ The removal script completely removes:
 - All package repositories and caches
 
 ### ⚠️ Removal Warnings
-
 - **ALL DATA WILL BE PERMANENTLY DELETED**
 - **ALL DATABASES WILL BE LOST**
 - **ALL PROJECT FILES WILL BE REMOVED**
 - This action cannot be undone
-- Make sure to backup any important data before removal
+- Make sure to back up any important data before removal
 
 ## 🔧 Troubleshooting
-
 ### DPKG and Package Management Issues
-
 **dpkg was interrupted error**:
 ```bash
 # Use the removal script to clean up package issues
@@ -370,7 +294,6 @@ sudo certbot --nginx -d yourdomain.com --email your@email.com --agree-tos
 ```
 
 ### Log Locations
-
 - **Nginx**: `/var/log/nginx/`
 - **PHP-FPM**: `/var/log/php/`
 - **MariaDB**: `/var/log/mysql/`
@@ -379,11 +302,9 @@ sudo certbot --nginx -d yourdomain.com --email your@email.com --agree-tos
 
 
 ## 🤝 Contributing
-
 We welcome contributions from the community! This is an open-source project, and your input helps make it better for everyone.
 
 ### How to Contribute
-
 1. **Fork the Repository**
    ```bash
    git clone https://github.com/msulaimanmisri/s-lemp.git
@@ -412,17 +333,15 @@ We welcome contributions from the community! This is an open-source project, and
    ```
 
 ### Contribution Guidelines
-
 #### Code Contributions
 
 - **Shell Script Standards**: Follow ShellCheck recommendations
 - **Error Handling**: Include proper error handling and rollback mechanisms
 - **Documentation**: Comment complex logic and update README when needed
-- **Testing**: Test on clean Ubuntu installations (20.04, 22.04, 24.04)
+- **Testing**: Test on clean Ubuntu installations (22.04, 24.04)
 - **Security**: Review security implications of any changes
 
 #### Bug Reports
-
 When reporting bugs, please include:
 
 - Ubuntu version and architecture
@@ -432,26 +351,21 @@ When reporting bugs, please include:
 - Expected vs actual behavior
 
 #### Feature Requests
-
 For new features, please:
-
 - Describe the use case and problem it solves
 - Provide implementation suggestions if possible
 - Consider backward compatibility
 - Discuss performance and security implications
 
 ### Types of Contributions Needed
-
 - **🐛 Bug Fixes**: Help identify and fix issues
 - **🚀 New Features**: Add support for new PHP versions, databases, etc.
 - **📚 Documentation**: Improve installation guides, troubleshooting
 - **🧪 Testing**: Test on different Ubuntu versions and configurations
 - **🔒 Security**: Security audits and improvements
 - **⚡ Performance**: Optimization and performance enhancements
-- **🌐 Localization**: Translate documentation to other languages
 
 ### Development Setup
-
 1. **Local Testing Environment**
    ```bash
    # Use Docker or VirtualBox for testing
@@ -472,18 +386,15 @@ For new features, please:
    ```
 
 ### Community Guidelines
-
 - **Be Respectful**: Treat all contributors with respect and kindness
 - **Be Constructive**: Provide helpful feedback and suggestions
 - **Be Patient**: Understand that this is a volunteer-driven project
 - **Be Collaborative**: Work together to find the best solutions
 
 ### Recognition
-
 All contributors will be recognized in our contributors list. Significant contributions may be highlighted in release notes and project documentation.
 
 ## 📄 License
-
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ### MIT License Summary
@@ -493,23 +404,15 @@ You are free to:
 - Modify and distribute the software
 - Include it in proprietary projects
 
-Under the conditions:
-- Include the original license and copyright notice
-- The software is provided "as is" without warranty
-
----
+The original author is not liable for any damages arising from the use of this software.
+- Author's name: Sulaiman Misri
+- Author's company: UEM Sunrise Berhad
+- Author's position: Senior Full-stack Developer
 
 ## 📞 Support
-
 If you encounter any issues or need help:
-
 1. **Check the Documentation**: Review this README and troubleshooting section
 2. **Search Issues**: Look through existing GitHub issues
 3. **Create an Issue**: Report bugs or request features
-4. **Community Discussion**: Join discussions in GitHub Discussions
-
----
 
 **Made with ❤️ for the Laravel community**
-
-*This project aims to simplify Laravel deployment and make robust hosting accessible to everyone.*
