@@ -24,7 +24,8 @@ while [[ $# -gt 0 ]]; do
             SSL_EMAIL="admin@laravel.local"
             PHP_VERSION="8.3"
             QUEUE_DRIVER="database"
-            INSTALL_SSL=false 
+            INSTALL_SSL=false
+            INSTALL_DATABASE=true
             shift
             ;;
     
@@ -48,6 +49,11 @@ while [[ $# -gt 0 ]]; do
             fi
             ;;
 
+        --skip-database)
+            INSTALL_DATABASE=false
+            shift
+            ;;
+
         --help|-h)
             echo "S-LEMP Stack Installation Script"
             echo ""
@@ -58,12 +64,14 @@ while [[ $# -gt 0 ]]; do
             echo "  --non-interactive, -n       Run in non-interactive mode with defaults"
             echo "  --php-version VERSION       Set PHP version (8.3 or 8.4)"
             echo "  --queue-driver DRIVER       Set queue driver (redis or database)"
+            echo "  --skip-database             Skip MariaDB installation (use external database)"
             echo "  --help, -h                  Show this help message"
             echo ""
 
             echo "Examples:"
             echo "  $0                          # Interactive mode"
-            echo "  $0 --non-interactive        # Non-interactive with PHP 8.3 and Redis"
+            echo "  $0 --non-interactive        # Non-interactive with database"
+            echo "  $0 --non-interactive --skip-database  # Non-interactive without database"
             echo "  $0 --non-interactive --php-version 8.4 --queue-driver database"
             echo ""
 
@@ -127,7 +135,14 @@ cleanup_on_error() {
     sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null || true
     
     # Stop any services that might be in inconsistent state
-    for service in nginx php${PHP_VERSION}-fpm mariadb redis-server supervisor; do
+    local cleanup_services=("nginx" "php${PHP_VERSION}-fpm" "redis-server" "supervisor")
+    
+    # Add MariaDB to cleanup services only if it was being installed
+    if [[ "${INSTALL_DATABASE:-true}" == "true" ]]; then
+        cleanup_services+=("mariadb")
+    fi
+    
+    for service in "${cleanup_services[@]}"; do
         if systemctl is-active --quiet $service 2>/dev/null; then
             sudo systemctl stop $service 2>/dev/null || true
         fi
@@ -188,6 +203,7 @@ SSL_EMAIL=""
 INTERACTIVE_MODE=true
 INSTALL_SSL=false
 SSL_INSTALL_SUCCESS=false
+INSTALL_DATABASE=true
 
 # =========================================================================
 # Colors for output
@@ -397,6 +413,7 @@ run_configuration_wizard() {
         QUEUE_DRIVER=${QUEUE_DRIVER:-database}
         SUPERVISOR_PROCESS_NUM=${SUPERVISOR_PROCESS_NUM:-3}
         INSTALL_SSL=false
+        INSTALL_DATABASE=${INSTALL_DATABASE:-true}
         return
     fi
 
@@ -453,7 +470,38 @@ run_configuration_wizard() {
     echo -e "${GREEN}DATABASE CONFIGURATION${NC}"
     echo "============================================="
     
-    # Database Name
+    # Database Installation Option
+    echo ""
+    info "Database Installation Option:"
+    echo "  1) Install MariaDB locally (Recommended for single-server setup)"
+    echo "  2) Skip database installation (If you want to use external database server)"
+    echo ""
+    
+    while true; do
+        read -p "Choose database option [1]: " db_install_option
+        db_install_option=${db_install_option:-1}
+        
+        case $db_install_option in
+            1)
+                INSTALL_DATABASE=true
+                log "✓ MariaDB will be installed locally"
+                break
+                ;;
+            2)
+                INSTALL_DATABASE=false
+                log "✓ Database installation will be skipped"
+                info "You will need to configure your Laravel app to connect to an external database"
+                break
+                ;;
+            *)
+                error "Invalid option. Please choose 1 or 2."
+                ;;
+        esac
+    done
+    echo ""
+    
+    # Only show database configuration if installing locally
+    if [[ "$INSTALL_DATABASE" == "true" ]]; then
     while true; do
         read -p "Enter database name [${PROJECT_NAME//-/_}_db]: " input_db_name
         DB_NAME=${input_db_name:-"${PROJECT_NAME//-/_}_db"}
@@ -556,6 +604,8 @@ run_configuration_wizard() {
         esac
     done
     echo ""
+    
+    fi
     
     echo ""
     echo "============================================="
@@ -689,11 +739,17 @@ show_configuration_summary() {
     echo -e "   ${WHITE}├─${NC} SSL Email: ${GREEN}$SSL_EMAIL${NC}"
     echo -e "   ${WHITE}└─${NC} Project Path: ${GREEN}$PROJECT_ROOT/$PROJECT_NAME${NC}"
     echo ""
-    echo -e "${YELLOW}🗄️  Database Configuration:${NC}"
-    echo -e "   ${WHITE}├─${NC} Database Name: ${GREEN}$DB_NAME${NC}"
-    echo -e "   ${WHITE}├─${NC} Database User: ${GREEN}$DB_USER${NC}"
-    echo -e "   ${WHITE}├─${NC} Database Password: ${GREEN}[HIDDEN]${NC}"
-    echo -e "   ${WHITE}└─${NC} Root Password: ${GREEN}[HIDDEN]${NC}"
+    if [[ "$INSTALL_DATABASE" == "true" ]]; then
+        echo -e "${YELLOW}🗄️  Database Configuration:${NC}"
+        echo -e "   ${WHITE}├─${NC} Install MariaDB: ${GREEN}Yes (Local installation)${NC}"
+        echo -e "   ${WHITE}├─${NC} Database Name: ${GREEN}$DB_NAME${NC}"
+        echo -e "   ${WHITE}├─${NC} Database User: ${GREEN}$DB_USER${NC}"
+        echo -e "   ${WHITE}├─${NC} Database Password: ${GREEN}[HIDDEN]${NC}"
+        echo -e "   ${WHITE}└─${NC} Root Password: ${GREEN}[HIDDEN]${NC}"
+    else
+        echo -e "${YELLOW}🗄️  Database Configuration:${NC}"
+        echo -e "   ${WHITE}└─${NC} Install MariaDB: ${YELLOW}No (Use external database)${NC}"
+    fi
     echo ""
     echo -e "${YELLOW}Services Configuration:${NC}"
     echo -e "   ${WHITE}├─${NC} Redis Password: ${GREEN}[HIDDEN]${NC}"
@@ -752,6 +808,7 @@ DOMAIN_NAME=$DOMAIN_NAME
 SSL_EMAIL=$SSL_EMAIL
 PROJECT_ROOT=$PROJECT_ROOT
 
+INSTALL_DATABASE=$INSTALL_DATABASE
 DB_NAME=$DB_NAME
 DB_USER=$DB_USER
 DB_PASSWORD=$DB_PASSWORD
@@ -768,11 +825,12 @@ INSTALL_SSL=$INSTALL_SSL
 # HTTP: http://$DOMAIN_NAME
 # HTTPS: https://$DOMAIN_NAME (after SSL setup)
 
-# Database Connection:
+# Database Connection:$(if [[ "$INSTALL_DATABASE" == "true" ]]; then echo "
 # Host: localhost
 # Database: $DB_NAME
 # Username: $DB_USER
-# Password: [see above]
+# Password: [see above]"; else echo "
+# Database installation was skipped - configure external database in your Laravel .env file"; fi)
 
 # Important Commands:
 # Fix Laravel permissions: fix-laravel-permissions $PROJECT_ROOT/$PROJECT_NAME
@@ -797,6 +855,7 @@ DOMAIN_NAME=$DOMAIN_NAME
 SSL_EMAIL=$SSL_EMAIL
 PROJECT_ROOT=$PROJECT_ROOT
 
+INSTALL_DATABASE=$INSTALL_DATABASE
 DB_NAME=$DB_NAME
 DB_USER=$DB_USER
 DB_PASSWORD=$DB_PASSWORD
@@ -813,11 +872,12 @@ INSTALL_SSL=$INSTALL_SSL
 # HTTP: http://$DOMAIN_NAME
 # HTTPS: https://$DOMAIN_NAME (after SSL setup)
 
-# Database Connection:
+# Database Connection:$(if [[ "$INSTALL_DATABASE" == "true" ]]; then echo "
 # Host: localhost
 # Database: $DB_NAME
 # Username: $DB_USER
-# Password: [see above]
+# Password: [see above]"; else echo "
+# Database installation was skipped - configure external database in your Laravel .env file"; fi)
 
 # Important Commands:
 # Fix Laravel permissions: fix-laravel-permissions $PROJECT_ROOT/$PROJECT_NAME
@@ -2682,7 +2742,13 @@ verify_installation() {
     local errors=0
     
     # Check services
-    local services=("nginx" "php${PHP_VERSION}-fpm" "mariadb" "redis-server" "supervisor")
+    local services=("nginx" "php${PHP_VERSION}-fpm" "redis-server" "supervisor")
+    
+    # Add MariaDB to services list only if it was installed
+    if [[ "$INSTALL_DATABASE" == "true" ]]; then
+        services+=("mariadb")
+    fi
+    
     for service in "${services[@]}"; do
         if systemctl is-active --quiet "$service"; then
             log "✓ Service $service is running"
@@ -2693,14 +2759,24 @@ verify_installation() {
     done
     
     # Check ports
-    local ports=("80:nginx" "22:ssh" "3306:mysql")
+    local ports=("80:nginx" "22:ssh")
+    
+    # Add MySQL port only if database was installed locally
+    if [[ "$INSTALL_DATABASE" == "true" ]]; then
+        ports+=("3306:mysql")
+    fi
+    
     for port_service in "${ports[@]}"; do
         local port="${port_service%:*}"
         local service="${port_service#*:}"
         if ss -ln | grep -q ":$port "; then
             log "✓ Port $port ($service) is listening"
         else
-            warning "⚠ Port $port ($service) is not listening"
+            if [[ "$service" == "mysql" ]] && [[ "$INSTALL_DATABASE" == "false" ]]; then
+                log "✓ Port $port ($service) not listening (external database expected)"
+            else
+                warning "⚠ Port $port ($service) is not listening"
+            fi
         fi
     done
     
@@ -2776,11 +2852,15 @@ verify_installation() {
         ((errors++))
     fi
     
-    # Check database connectivity
-    if mysql -u "${DB_USER}" -p"${DB_PASSWORD}" -e "USE ${DB_NAME}; SELECT 1;" &>/dev/null; then
-        log "✓ Database connectivity works"
+    # Check database connectivity (only if MariaDB was installed locally)
+    if [[ "$INSTALL_DATABASE" == "true" ]]; then
+        if mysql -u "${DB_USER}" -p"${DB_PASSWORD}" -e "USE ${DB_NAME}; SELECT 1;" &>/dev/null; then
+            log "✓ Database connectivity works"
+        else
+            warning "⚠ Database connectivity test failed"
+        fi
     else
-        warning "⚠ Database connectivity test failed"
+        log "✓ Database installation skipped - external database configuration required"
     fi
     
     # Check Redis connectivity
@@ -2908,7 +2988,7 @@ main() {
         echo -e "${CYAN}This script will install and configure:${NC}"
         echo "  - Nginx web server (optimized for Laravel)"
         echo "  - PHP 8.3/8.4 with all Laravel extensions"
-        echo "  - MariaDB database server"
+        echo "  - MariaDB database server (optional)"
         echo "  - Redis server for caching and sessions"
         echo "  - Node.js for asset compilation"
         echo "  - Composer for PHP dependencies"
@@ -2945,7 +3025,15 @@ main() {
     install_nginx
     create_project_structure
     install_php
-    install_mariadb
+    
+    # Conditionally install MariaDB
+    if [[ "$INSTALL_DATABASE" == "true" ]]; then
+        install_mariadb
+    else
+        info "Skipping MariaDB installation as requested"
+        info "Remember to configure your Laravel app to connect to an external database"
+    fi
+    
     install_composer
     install_nodejs
     install_redis
