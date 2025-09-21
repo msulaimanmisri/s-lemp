@@ -26,6 +26,7 @@ while [[ $# -gt 0 ]]; do
             QUEUE_DRIVER="database"
             INSTALL_SSL=false
             INSTALL_DATABASE=true
+            INSTALL_REDIS=true
             shift
             ;;
     
@@ -54,6 +55,11 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
 
+        --skip-redis)
+            INSTALL_REDIS=false
+            shift
+            ;;
+
         --help|-h)
             echo "S-LEMP Stack Installation Script"
             echo ""
@@ -65,13 +71,14 @@ while [[ $# -gt 0 ]]; do
             echo "  --php-version VERSION       Set PHP version (8.3 or 8.4)"
             echo "  --queue-driver DRIVER       Set queue driver (redis or database)"
             echo "  --skip-database             Skip MariaDB installation (use external database)"
+            echo "  --skip-redis                Skip Redis installation (use external cache/sessions)"
             echo "  --help, -h                  Show this help message"
             echo ""
 
             echo "Examples:"
             echo "  $0                          # Interactive mode"
-            echo "  $0 --non-interactive        # Non-interactive with database"
-            echo "  $0 --non-interactive --skip-database  # Non-interactive without database"
+            echo "  $0 --non-interactive        # Non-interactive with database and Redis"
+            echo "  $0 --non-interactive --skip-database --skip-redis  # Minimal installation"
             echo "  $0 --non-interactive --php-version 8.4 --queue-driver database"
             echo ""
 
@@ -204,6 +211,7 @@ INTERACTIVE_MODE=true
 INSTALL_SSL=false
 SSL_INSTALL_SUCCESS=false
 INSTALL_DATABASE=true
+INSTALL_REDIS=true
 
 # =========================================================================
 # Colors for output
@@ -374,7 +382,7 @@ show_slemp_banner() {
     echo "╚══════╝      ╚══════╝╚══════╝╚═╝     ╚═╝╚═╝     "
     echo -e "${NC}"
     echo ""
-    echo -e "${GREEN}S-LEMP INSTALLATION FRAMEWORK BY SULAIMAN MISRI${NC}"
+    echo -e "${GREEN}S-LEMP INSTALLATION AUTOMATION BY SULAIMAN MISRI${NC}"
     echo -e "${YELLOW}** Deploy a production-ready Laravel environment effortlessly. ${NC}"
     echo -e "${YELLOW}** All optimized for your Laravel application. ${NC}"
     echo ""
@@ -414,6 +422,7 @@ run_configuration_wizard() {
         SUPERVISOR_PROCESS_NUM=${SUPERVISOR_PROCESS_NUM:-3}
         INSTALL_SSL=false
         INSTALL_DATABASE=${INSTALL_DATABASE:-true}
+        INSTALL_REDIS=${INSTALL_REDIS:-true}  # Default to true in non-interactive mode
         return
     fi
 
@@ -473,8 +482,8 @@ run_configuration_wizard() {
     # Database Installation Option
     echo ""
     info "Database Installation Option:"
-    echo "  1) Install MariaDB locally (Recommended for single-server setup)"
-    echo "  2) Skip database installation (If you want to use external database server)"
+    echo "  1) Install MariaDB"
+    echo "  2) Skip MariaDB installation (If you want to use external database server)"
     echo ""
     
     while true; do
@@ -612,6 +621,38 @@ run_configuration_wizard() {
     echo -e "${GREEN}REDIS CONFIGURATION${NC}"
     echo "============================================="
     
+    # Redis Installation Option
+    echo ""
+    info "Redis Installation Option:"
+    echo "  1) Install Redis"
+    echo "  2) Skip Redis installation"
+    echo ""
+    
+    while true; do
+        read -p "Choose Redis option [1]: " redis_install_option
+        redis_install_option=${redis_install_option:-1}
+        
+        case $redis_install_option in
+            1)
+                INSTALL_REDIS=true
+                log "✓ Redis will be installed"
+                break
+                ;;
+            2)
+                INSTALL_REDIS=false
+                log "✓ Redis installation will be skipped"
+                info "You can configure external caching in your Laravel app if needed"
+                break
+                ;;
+            *)
+                error "Invalid option. Please choose 1 or 2."
+                ;;
+        esac
+    done
+    echo ""
+    
+    # Only show Redis configuration if installing locally
+    if [[ "$INSTALL_REDIS" == "true" ]]; then
     # Redis Password
     while true; do
         read -p "Generate Redis password automatically? (Y/n): " auto_redis_pass
@@ -643,6 +684,8 @@ run_configuration_wizard() {
         esac
     done
     echo ""
+    
+    fi  # End of Redis configuration for local installation
     
     echo ""
     echo "============================================="
@@ -682,29 +725,37 @@ run_configuration_wizard() {
     echo ""
     info "Queue Driver Selection:"
     echo "  1) Database (Simple setup, uses database for queues)"
-    echo "  2) Redis (Recommended for performance and scalability)"
-    echo ""
     
-    while true; do
-        read -p "Choose queue driver [1]: " queue_driver_option
-        queue_driver_option=${queue_driver_option:-1}
+    if [[ "$INSTALL_REDIS" == "true" ]]; then
+        echo "  2) Redis (Recommended for performance and scalability)"
+        echo ""
         
-        case $queue_driver_option in
-            1)
-                QUEUE_DRIVER="database"
-                log "✓ Selected Database queue driver"
-                break
-                ;;
-            2)
-                QUEUE_DRIVER="redis"
-                log "✓ Selected Redis queue driver"
-                break
-                ;;
-            *)
-                error "Please choose option 1 or 2"
-                ;;
-        esac
-    done
+        while true; do
+            read -p "Choose queue driver [1]: " queue_driver_option
+            queue_driver_option=${queue_driver_option:-1}
+            
+            case $queue_driver_option in
+                1)
+                    QUEUE_DRIVER="database"
+                    log "✓ Selected Database queue driver"
+                    break
+                    ;;
+                2)
+                    QUEUE_DRIVER="redis"
+                    log "✓ Selected Redis queue driver"
+                    break
+                    ;;
+                *)
+                    error "Please choose option 1 or 2"
+                    ;;
+            esac
+        done
+    else
+        echo ""
+        info "Redis is not being installed, auto selecting Database queue driver"
+        QUEUE_DRIVER="database"
+        log "✓ Selected Database queue driver"
+    fi
     echo ""
     
     # Supervisor Process Number
@@ -751,8 +802,16 @@ show_configuration_summary() {
         echo -e "   ${WHITE}└─${NC} Install MariaDB: ${YELLOW}No (Use external database)${NC}"
     fi
     echo ""
+    if [[ "$INSTALL_REDIS" == "true" ]]; then
+        echo -e "${YELLOW}🔴 Redis Configuration:${NC}"
+        echo -e "   ${WHITE}├─${NC} Install Redis: ${GREEN}Yes (Local installation)${NC}"
+        echo -e "   ${WHITE}└─${NC} Redis Password: ${GREEN}[HIDDEN]${NC}"
+    else
+        echo -e "${YELLOW}🔴 Redis Configuration:${NC}"
+        echo -e "   ${WHITE}└─${NC} Install Redis: ${YELLOW}No (Use external cache)${NC}"
+    fi
+    echo ""
     echo -e "${YELLOW}Services Configuration:${NC}"
-    echo -e "   ${WHITE}├─${NC} Redis Password: ${GREEN}[HIDDEN]${NC}"
     echo -e "   ${WHITE}├─${NC} Queue Workers: ${GREEN}$SUPERVISOR_PROCESS_NUM${NC}"
     echo -e "   ${WHITE}├─${NC} Queue Driver: ${GREEN}$QUEUE_DRIVER${NC}"
     echo -e "   ${WHITE}├─${NC} PHP Version: ${GREEN}$PHP_VERSION${NC}"
@@ -814,6 +873,7 @@ DB_USER=$DB_USER
 DB_PASSWORD=$DB_PASSWORD
 DB_ROOT_PASSWORD=$DB_ROOT_PASSWORD
 
+INSTALL_REDIS=$INSTALL_REDIS
 REDIS_PASSWORD=$REDIS_PASSWORD
 SUPERVISOR_PROCESS_NUM=$SUPERVISOR_PROCESS_NUM
 QUEUE_DRIVER=$QUEUE_DRIVER
@@ -861,6 +921,7 @@ DB_USER=$DB_USER
 DB_PASSWORD=$DB_PASSWORD
 DB_ROOT_PASSWORD=$DB_ROOT_PASSWORD
 
+INSTALL_REDIS=$INSTALL_REDIS
 REDIS_PASSWORD=$REDIS_PASSWORD
 SUPERVISOR_PROCESS_NUM=$SUPERVISOR_PROCESS_NUM
 QUEUE_DRIVER=$QUEUE_DRIVER
@@ -1422,7 +1483,13 @@ verify_php_extensions() {
     sleep 3
     
     # Define critical extensions that must be working
-    local critical_extensions=("redis" "mbstring" "xml" "curl" "zip" "gd" "mysql" "bcmath" "intl" "opcache")
+    local critical_extensions=("mbstring" "xml" "curl" "zip" "gd" "mysql" "bcmath" "intl" "opcache")
+    
+    # Add Redis extension only if Redis was installed
+    if [[ "$INSTALL_REDIS" == "true" ]]; then
+        critical_extensions+=("redis")
+    fi
+    
     local missing_extensions=()
     local retry_count=0
     local max_retries=2
@@ -1751,7 +1818,13 @@ EOF
     echo "============================================="
     
     # Quick verification of critical extensions
-    local final_check_extensions=("redis" "mbstring" "curl" "mysql")
+    local final_check_extensions=("mbstring" "curl" "mysql")
+    
+    # Add Redis extension only if Redis was installed
+    if [[ "$INSTALL_REDIS" == "true" ]]; then
+        final_check_extensions+=("redis")
+    fi
+    
     for ext in "${final_check_extensions[@]}"; do
         if [[ "$ext" == "mysql" ]]; then
             if php${PHP_VERSION} -m | grep -qE "(mysqli|mysqlnd|pdo_mysql)"; then
@@ -2742,7 +2815,12 @@ verify_installation() {
     local errors=0
     
     # Check services
-    local services=("nginx" "php${PHP_VERSION}-fpm" "redis-server" "supervisor")
+    local services=("nginx" "php${PHP_VERSION}-fpm" "supervisor")
+    
+    # Add Redis to services list only if it was installed
+    if [[ "$INSTALL_REDIS" == "true" ]]; then
+        services+=("redis-server")
+    fi
     
     # Add MariaDB to services list only if it was installed
     if [[ "$INSTALL_DATABASE" == "true" ]]; then
@@ -2785,7 +2863,13 @@ verify_installation() {
         log "✓ PHP ${PHP_VERSION} is working"
         
         # Check critical PHP extensions with better error reporting
-        local extensions=("redis" "mbstring" "xml" "curl" "zip" "gd")
+        local extensions=("mbstring" "xml" "curl" "zip" "gd")
+        
+        # Add Redis extension to check list only if Redis was installed
+        if [[ "$INSTALL_REDIS" == "true" ]]; then
+            extensions+=("redis")
+        fi
+        
         local missing_count=0
         
         for ext in "${extensions[@]}"; do
@@ -2863,30 +2947,34 @@ verify_installation() {
         log "✓ Database installation skipped - external database configuration required"
     fi
     
-    # Check Redis connectivity
-    if timeout 5 redis-cli -a "${REDIS_PASSWORD}" ping 2>/dev/null | grep -q "PONG"; then
-        log "✓ Redis server connectivity works"
-        
-        # Also test PHP Redis extension connectivity
-        if php${PHP_VERSION} -r "
-            try {
-                \$redis = new Redis();
-                \$redis->connect('127.0.0.1', 6379);
-                \$redis->auth('${REDIS_PASSWORD}');
-                \$result = \$redis->ping();
-                exit(0);
-            } catch (Exception \$e) {
-                echo 'PHP Redis extension test: FAILED - ' . \$e->getMessage();
-                exit(1);
-            }
-        " 2>/dev/null; then
-            log "✓ PHP Redis extension connectivity works"
+    # Check Redis connectivity (only if Redis was installed locally)
+    if [[ "$INSTALL_REDIS" == "true" ]]; then
+        if timeout 5 redis-cli -a "${REDIS_PASSWORD}" ping 2>/dev/null | grep -q "PONG"; then
+            log "✓ Redis server connectivity works"
+            
+            # Also test PHP Redis extension connectivity
+            if php${PHP_VERSION} -r "
+                try {
+                    \$redis = new Redis();
+                    \$redis->connect('127.0.0.1', 6379);
+                    \$redis->auth('${REDIS_PASSWORD}');
+                    \$result = \$redis->ping();
+                    exit(0);
+                } catch (Exception \$e) {
+                    echo 'PHP Redis extension test: FAILED - ' . \$e->getMessage();
+                    exit(1);
+                }
+            " 2>/dev/null; then
+                log "✓ PHP Redis extension connectivity works"
+            else
+                warning "⚠ PHP Redis extension connectivity test failed"
+                info "Redis server is running but PHP extension may have issues"
+            fi
         else
-            warning "⚠ PHP Redis extension connectivity test failed"
-            info "Redis server is running but PHP extension may have issues"
+            warning "⚠ Redis server connectivity test failed"
         fi
     else
-        warning "⚠ Redis server connectivity test failed"
+        log "✓ Redis installation skipped - no Redis connectivity check needed"
     fi
     
     # Check Nginx configuration
@@ -2989,7 +3077,7 @@ main() {
         echo "  - Nginx web server (optimized for Laravel)"
         echo "  - PHP 8.3/8.4 with all Laravel extensions"
         echo "  - MariaDB database server (optional)"
-        echo "  - Redis server for caching and sessions"
+        echo "  - Redis server (optional)"
         echo "  - Node.js for asset compilation"
         echo "  - Composer for PHP dependencies"
         echo "  - PHP OPcache for performance"
@@ -3036,7 +3124,14 @@ main() {
     
     install_composer
     install_nodejs
-    install_redis
+    
+    if [[ "$INSTALL_REDIS" == "true" ]]; then
+        install_redis
+    else
+        info "Skipping Redis installation as requested"
+        info "Redis will not be available for caching or sessions"
+    fi
+    
     install_supervisor
     create_laravel_queue_config
     create_laravel_permission_helper
