@@ -23,6 +23,7 @@ while [[ $# -gt 0 ]]; do
             REDIS_PASSWORD=$(openssl rand -base64 12 2>/dev/null || echo "redispass123")
             SSL_EMAIL="admin@laravel.local"
             PHP_VERSION="8.3"
+            MARIADB_VERSION=${MARIADB_VERSION:-11.4}
             QUEUE_DRIVER="database"
             INSTALL_SSL=false
             INSTALL_DATABASE=true
@@ -60,6 +61,16 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
 
+        --mariadb-version)
+            if [[ "$2" == "system" ]] || [[ "$2" == "11.4" ]]; then
+                MARIADB_VERSION="$2"
+                shift 2
+            else
+                echo "Error: Invalid MariaDB version. Use 'system' (Ubuntu default) or '11.4' (LTS via MariaDB repo)"
+                exit 1
+            fi
+            ;;
+
         --help|-h)
             echo "S-LEMP Stack Installation Script"
             echo ""
@@ -69,6 +80,7 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --non-interactive, -n       Run in non-interactive mode with defaults"
             echo "  --php-version VERSION       Set PHP version (8.3, 8.4 or 8.5)"
+            echo "  --mariadb-version VERSION   Set MariaDB version (system or 11.4)"
             echo "  --queue-driver DRIVER       Set queue driver (redis or database)"
             echo "  --skip-database             Skip MariaDB installation (use external database)"
             echo "  --skip-redis                Skip Redis installation (use external cache/sessions)"
@@ -80,6 +92,7 @@ while [[ $# -gt 0 ]]; do
             echo "  $0 --non-interactive        # Non-interactive with database and Redis"
             echo "  $0 --non-interactive --skip-database --skip-redis  # Minimal installation"
             echo "  $0 --non-interactive --php-version 8.4 --queue-driver database"
+            echo "  $0 --non-interactive --mariadb-version 11.4"
             echo ""
 
             echo "Interactive mode (default): Run configuration wizard"
@@ -200,6 +213,7 @@ REDIS_PASSWORD=""
 SYSTEM_USER="www-data"
 PROJECT_GROUP="www-data"
 PHP_VERSION="8.3"
+MARIADB_VERSION="11.4"
 
 NODE_JS_VERSION="24.x"
 SUPERVISOR_PROCESS_NUM=3
@@ -418,6 +432,7 @@ run_configuration_wizard() {
         DB_ROOT_PASSWORD=${DB_ROOT_PASSWORD:-$(openssl rand -base64 16 2>/dev/null || echo "rootpass123")}
         REDIS_PASSWORD=${REDIS_PASSWORD:-$(openssl rand -base64 12 2>/dev/null || echo "redispass123")}
         PHP_VERSION=${PHP_VERSION:-8.3}
+        MARIADB_VERSION=${MARIADB_VERSION:-11.4}
         QUEUE_DRIVER=${QUEUE_DRIVER:-database}
         SUPERVISOR_PROCESS_NUM=${SUPERVISOR_PROCESS_NUM:-3}
         INSTALL_SSL=false
@@ -509,7 +524,26 @@ run_configuration_wizard() {
     done
     echo ""
     
-    # Only show database configuration if installing locally
+    # MariaDB version selection (only if installing locally)
+    if [[ "$INSTALL_DATABASE" == "true" ]]; then
+        echo ""
+        info "MariaDB Version Selection:"
+        echo "  1) System default (Ubuntu archive: 10.6 on 22.04, 10.11 on 24.04)"
+        echo "  2) MariaDB 11.4 LTS (via MariaDB Foundation repo, recommended)"
+        echo ""
+        while true; do
+            read -p "Choose MariaDB version [2]: " mariadb_version_option
+            mariadb_version_option=${mariadb_version_option:-2}
+            case $mariadb_version_option in
+                1) MARIADB_VERSION="system"; log "✓ Selected MariaDB: system default"; break ;;
+                2) MARIADB_VERSION="11.4"; log "✓ Selected MariaDB 11.4 LTS"; break ;;
+                *) error "Please choose option 1 or 2" ;;
+            esac
+        done
+        echo ""
+    fi
+
+    # Only show database name/user/password prompts if installing locally
     if [[ "$INSTALL_DATABASE" == "true" ]]; then
     while true; do
         read -p "Enter database name [${PROJECT_NAME//-/_}_db]: " input_db_name
@@ -798,7 +832,11 @@ show_configuration_summary() {
     echo ""
     if [[ "$INSTALL_DATABASE" == "true" ]]; then
         echo -e "${YELLOW}🗄️  Database Configuration:${NC}"
-        echo -e "   ${WHITE}├─${NC} Install MariaDB: ${GREEN}Yes (Local installation)${NC}"
+        if [[ "$MARIADB_VERSION" == "11.4" ]]; then
+            echo -e "   ${WHITE}├─${NC} Install MariaDB: ${GREEN}Yes — 11.4 LTS (MariaDB repo)${NC}"
+        else
+            echo -e "   ${WHITE}├─${NC} Install MariaDB: ${GREEN}Yes — system default (Ubuntu archive)${NC}"
+        fi
         echo -e "   ${WHITE}├─${NC} Database Name: ${GREEN}$DB_NAME${NC}"
         echo -e "   ${WHITE}├─${NC} Database User: ${GREEN}$DB_USER${NC}"
         echo -e "   ${WHITE}├─${NC} Database Password: ${GREEN}[HIDDEN]${NC}"
@@ -821,6 +859,7 @@ show_configuration_summary() {
     echo -e "   ${WHITE}├─${NC} Queue Workers: ${GREEN}$SUPERVISOR_PROCESS_NUM${NC}"
     echo -e "   ${WHITE}├─${NC} Queue Driver: ${GREEN}$QUEUE_DRIVER${NC}"
     echo -e "   ${WHITE}├─${NC} PHP Version: ${GREEN}$PHP_VERSION${NC}"
+    echo -e "   ${WHITE}├─${NC} MariaDB Version: ${GREEN}$MARIADB_VERSION${NC}"
     echo -e "   ${WHITE}└─${NC} Node.js Version: ${GREEN}$NODE_JS_VERSION${NC}"
     echo ""
     echo "============================================="
@@ -884,6 +923,7 @@ REDIS_PASSWORD=$REDIS_PASSWORD
 SUPERVISOR_PROCESS_NUM=$SUPERVISOR_PROCESS_NUM
 QUEUE_DRIVER=$QUEUE_DRIVER
 PHP_VERSION=$PHP_VERSION
+MARIADB_VERSION=$MARIADB_VERSION
 NODE_JS_VERSION=$NODE_JS_VERSION
 INSTALL_SSL=$INSTALL_SSL
 
@@ -932,6 +972,7 @@ REDIS_PASSWORD=$REDIS_PASSWORD
 SUPERVISOR_PROCESS_NUM=$SUPERVISOR_PROCESS_NUM
 QUEUE_DRIVER=$QUEUE_DRIVER
 PHP_VERSION=$PHP_VERSION
+MARIADB_VERSION=$MARIADB_VERSION
 NODE_JS_VERSION=$NODE_JS_VERSION
 INSTALL_SSL=$INSTALL_SSL
 
@@ -1916,6 +1957,117 @@ EOF
 }
 
 # =========================================================================
+# Setup MariaDB 11.4 LTS repository (with fallback to Ubuntu archive)
+# =========================================================================
+setup_mariadb_repo() {
+    if [[ "$MARIADB_VERSION" != "11.4" ]]; then
+        info "Using system default MariaDB from Ubuntu archive (MARIADB_VERSION=$MARIADB_VERSION)"
+        return 0
+    fi
+
+    if dpkg -l 2>/dev/null | grep -q "^ii.*mariadb-server"; then
+        warning "MariaDB already installed — skipping repository setup to avoid conflicts"
+        return 0
+    fi
+
+    if [[ -f /etc/apt/sources.list.d/mariadb.list ]] || ls /etc/apt/sources.list.d/*mariadb* >/dev/null 2>&1; then
+        log "✓ MariaDB repository already configured"
+        return 0
+    fi
+
+    info "Setting up MariaDB 11.4 LTS repository..."
+
+    if ! command -v curl >/dev/null 2>&1; then
+        warning "curl not available yet — attempting repo setup anyway"
+    fi
+
+    if curl -fsSL https://r.mariadb.com/downloads/mariadb_repo_setup 2>/dev/null | sudo bash -s -- --mariadb-server-version="11.4" 2>&1; then
+        log "✓ MariaDB 11.4 LTS repository configured"
+        wait_for_apt_lock
+        return 0
+    fi
+
+    warning "MariaDB repo setup script failed — attempting manual keyring setup..."
+
+    local ubuntu_codename
+    ubuntu_codename=$(lsb_release -cs 2>/dev/null || grep '^VERSION_CODENAME=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "jammy")
+
+    sudo install -m 0755 -d /etc/apt/keyrings 2>/dev/null || sudo mkdir -p /etc/apt/keyrings
+
+    if curl -fsSL https://r.mariadb.com/downloads/mariadb_repo_setup 2>/dev/null | gpg --dearmor 2>/dev/null | sudo tee /etc/apt/keyrings/mariadb.gpg >/dev/null 2>&1; then
+        log "✓ MariaDB GPG key installed"
+    else
+        warning "Failed to install MariaDB GPG key — falling back to Ubuntu archive"
+        MARIADB_VERSION="system"
+        return 0
+    fi
+
+    echo "deb [signed-by=/etc/apt/keyrings/mariadb.gpg] https://archive.mariadb.org/mariadb-11.4/repo/ubuntu ${ubuntu_codename} main" | sudo tee /etc/apt/sources.list.d/mariadb.list >/dev/null
+    echo "deb [signed-by=/etc/apt/keyrings/mariadb.gpg] https://dlm.mariadb.com/repo/mariadb-server/11.4/repo/ubuntu ${ubuntu_codename} main" | sudo tee /etc/apt/sources.list.d/mariadb-enterprise.list >/dev/null 2>&1 || true
+
+    wait_for_apt_lock
+    if sudo apt update 2>&1 | tail -5; then
+        log "✓ MariaDB 11.4 LTS repository configured (manual)"
+    else
+        warning "apt update after MariaDB repo setup failed — falling back to Ubuntu archive"
+        sudo rm -f /etc/apt/sources.list.d/mariadb.list /etc/apt/sources.list.d/mariadb-enterprise.list 2>/dev/null || true
+        MARIADB_VERSION="system"
+    fi
+}
+
+configure_mariadb_tuning() {
+    local tuning_file="/etc/mysql/mariadb.conf.d/60-laravel.cnf"
+
+    if [[ -f "$tuning_file" ]]; then
+        log "✓ MariaDB tuning file already exists: $tuning_file"
+        return 0
+    fi
+
+    info "Writing MariaDB Laravel tuning: $tuning_file"
+
+    local total_ram_gb
+    total_ram_gb=$(free -g 2>/dev/null | awk '/^Mem:/{print $2}' 2>/dev/null || echo 2)
+    [[ "$total_ram_gb" -lt 1 ]] && total_ram_gb=1
+
+    local innodb_buffer_pool_mb=$(( total_ram_gb * 1024 / 2 ))
+    [[ "$innodb_buffer_pool_mb" -lt 128 ]] && innodb_buffer_pool_mb=128
+    [[ "$innodb_buffer_pool_mb" -gt 4096 ]] && innodb_buffer_pool_mb=4096
+
+    sudo tee "$tuning_file" >/dev/null <<EOF
+# S-LEMP — Laravel-optimized MariaDB tuning (generated $(date -Iseconds))
+# Adjust innodb_buffer_pool_size to ~50% RAM (capped 128M–4G for portability).
+
+[mysqld]
+character-set-server  = utf8mb4
+collation-server      = utf8mb4_uca1400_ai_ci
+bind-address          = 127.0.0.1
+
+innodb_buffer_pool_size = ${innodb_buffer_pool_mb}M
+innodb_log_file_size    = 96M
+innodb_flush_log_at_trx_commit = 1
+innodb_file_per_table   = 1
+
+max_connections         = 151
+thread_cache_size       = 16
+
+slow_query_log          = 1
+slow_query_log_file     = /var/log/mysql/mariadb-slow.log
+long_query_time         = 2
+
+# Keep default for compatibility; override per-app if needed
+# sql_mode handled by MariaDB defaults (STRICT_TRANS_TABLES)
+
+[mysql]
+default-character-set = utf8mb4
+
+[client]
+default-character-set = utf8mb4
+EOF
+
+    log "✓ MariaDB tuning written (innodb_buffer_pool_size=${innodb_buffer_pool_mb}M for ~${total_ram_gb}G RAM)"
+}
+
+# =========================================================================
 # Install Database
 # =========================================================================
 #
@@ -1924,7 +2076,10 @@ install_mariadb() {
     echo "============================================="
     echo -e "${GREEN}Installing MariaDB database server...${NC}"
     echo "============================================="
-    
+
+    setup_mariadb_repo
+
+    wait_for_apt_lock
     sudo apt install -y mariadb-server mariadb-client
     
     echo " "
@@ -1974,30 +2129,60 @@ install_mariadb() {
     echo "============================================="
     
     # Create database and user with error handling
-    if sudo mysql -u root -p"${DB_ROOT_PASSWORD}" -e "CREATE DATABASE IF NOT EXISTS ${DB_NAME} DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"; then
-        log "✓ Database '${DB_NAME}' created"
+    # Use 11.4 default collation when available; falls back gracefully on older servers
+    local db_collation="utf8mb4_uca1400_ai_ci"
+    if [[ "$MARIADB_VERSION" == "system" ]]; then
+        db_collation="utf8mb4_unicode_ci"
+    fi
+
+    local mysql_root_cmd=(sudo mysql -u root -p"${DB_ROOT_PASSWORD}")
+
+    if sudo mysql -e "CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` DEFAULT CHARACTER SET utf8mb4 COLLATE ${db_collation};" 2>/dev/null || \
+       "${mysql_root_cmd[@]}" -e "CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` DEFAULT CHARACTER SET utf8mb4 COLLATE ${db_collation};" 2>/dev/null; then
+        log "✓ Database '${DB_NAME}' created (${db_collation})"
     else
         error "Failed to create database"
         return 1
     fi
-    
-    if sudo mysql -u root -p"${DB_ROOT_PASSWORD}" -e "CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASSWORD}';"; then
-        log "✓ Database user '${DB_USER}' created"
+
+    # Least-privilege user on localhost only (use external DB if '%' is needed)
+    local db_host="localhost"
+    # Escape single quotes in password for SQL string literal
+    local esc_db_password=${DB_PASSWORD//\'/\'\'}
+
+    if sudo mysql -e "CREATE USER IF NOT EXISTS '${DB_USER}'@'${db_host}' IDENTIFIED BY '${esc_db_password}';" 2>/dev/null || \
+       "${mysql_root_cmd[@]}" -e "CREATE USER IF NOT EXISTS '${DB_USER}'@'${db_host}' IDENTIFIED BY '${esc_db_password}';" 2>/dev/null; then
+        log "✓ Database user '${DB_USER}'@'${db_host}' created"
     else
         warning "Database user might already exist"
     fi
-    
-    if sudo mysql -u root -p"${DB_ROOT_PASSWORD}" -e "GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'%';"; then
-        log "✓ Privileges granted to '${DB_USER}'"
+
+    # Least-privilege grants (no GRANT OPTION, no ALL PRIVILEGES)
+    local laravel_grants="SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, INDEX, ALTER, REFERENCES, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE"
+
+    if sudo mysql -e "GRANT ${laravel_grants} ON \`${DB_NAME}\`.* TO '${DB_USER}'@'${db_host}';" 2>/dev/null || \
+       "${mysql_root_cmd[@]}" -e "GRANT ${laravel_grants} ON \`${DB_NAME}\`.* TO '${DB_USER}'@'${db_host}';" 2>/dev/null; then
+        log "✓ Least-privilege grants applied to '${DB_USER}'@'${db_host}'"
     else
         error "Failed to grant privileges"
         return 1
     fi
-    
-    sudo mysql -u root -p"${DB_ROOT_PASSWORD}" -e "FLUSH PRIVILEGES;"
-    
+
+    sudo mysql -e "FLUSH PRIVILEGES;" 2>/dev/null || "${mysql_root_cmd[@]}" -e "FLUSH PRIVILEGES;" 2>/dev/null || {
+        error "Failed to flush privileges"
+        return 1
+    }
+
+    configure_mariadb_tuning
+    if sudo systemctl restart mariadb 2>/dev/null; then
+        log "✓ MariaDB restarted with Laravel tuning"
+        sleep 2
+    else
+        warning "MariaDB tuning written but restart failed — will apply on next restart"
+    fi
+
     # Test database connection
-    if mysql -u "${DB_USER}" -p"${DB_PASSWORD}" -e "USE ${DB_NAME}; SELECT 1;" &>/dev/null; then
+    if mysql -u "${DB_USER}" -p"${DB_PASSWORD}" -e "USE \`${DB_NAME}\`; SELECT 1;" &>/dev/null; then
         log "✓ Database connection test successful"
     else
         warning "Database connection test failed - check credentials"
