@@ -226,15 +226,16 @@ sudo ./remove.sh
 ```
 
 ### What Gets Removed
-The removal script completely removes:
-- All LEMP stack components (Nginx, PHP, MariaDB, Redis)
-- All configuration files and directories
-- All databases and data (**PERMANENTLY DELETED**)
-- All project files in `/var/www/`
-- All SSL certificates
-- All cron jobs and scheduled tasks
-- All helper scripts and utilities
-- All package repositories and caches
+The removal script removes every artifact installed by `install.sh` / `lib/services.sh`:
+- Packages: Nginx, PHP 8.3/8.4/8.5 + extensions, MariaDB, Redis, Node.js, Supervisor, Certbot (apt + snap fallback)
+- Configs: Nginx site + `rate-limit.conf`, PHP-FPM pools + OPcache + logrotate, MariaDB tuning (`60-laravel.cnf`), Redis ACL, Supervisor queue workers
+- Data: databases and data in `/var/lib/mysql`, `/var/lib/redis` (**PERMANENTLY DELETED**), project files in `/var/www/laravel*` + `/var/www/html`
+- SSL: certificates in `/etc/letsencrypt` + `/var/log/letsencrypt` + `/var/lib/letsencrypt`
+- Cron: Laravel scheduler entry in `www-data` crontab
+- Helper: `fix-laravel-permissions` in `/usr/local/bin`
+- Repos/keyrings: Ondrej PHP, MariaDB, NodeSource, Redis.io (including `.sources` DEB822 variants)
+- Secrets: `/root/laravel_lemp_config.txt` (shredded), installer locks and temp files
+- UFW firewall is left untouched by default; remover prompts `Reset UFW? (y/N)` interactively before resetting
 
 ### ⚠️ Removal Warnings
 - **ALL DATA WILL BE PERMANENTLY DELETED**
