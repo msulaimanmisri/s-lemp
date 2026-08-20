@@ -285,7 +285,13 @@ echo " "
 echo "============================================="
 echo "Step 8: Removing Certbot and SSL"
 echo "============================================="
-safe_remove_packages "certbot" "python3-certbot-nginx" "snapd"
+if snap list 2>/dev/null | grep -q "^certbot "; then
+    sudo snap remove --purge certbot 2>/dev/null || warning "Failed to remove certbot snap"
+    log "✓ Removed certbot snap (snapd preserved)"
+else
+    log "No certbot snap found — skipping snap removal"
+fi
+safe_remove_packages "certbot" "python3-certbot-nginx"
 
 echo " "
 echo "============================================="
@@ -318,7 +324,6 @@ echo "Step 10: Removing configuration files and directories"
 echo "============================================="
 log "Removing Composer..."
 wait_for_apt_lock
-sudo rm -f /usr/local/bin/composer
 sudo rm -f /usr/local/bin/composer
 sudo rm -f /usr/bin/composer
 rm -f composer.phar 2>/dev/null || true
@@ -390,12 +395,19 @@ sudo add-apt-repository --remove ppa:ondrej/php -y 2>/dev/null || warning "Faile
 
 log "Removing NodeSource repository..."
 sudo rm -f /etc/apt/sources.list.d/nodesource.list
+sudo rm -f /etc/apt/sources.list.d/nodesource.sources
 sudo rm -f /etc/apt/keyrings/nodesource.gpg
 
 log "Removing other repositories..."
 sudo rm -f /etc/apt/sources.list.d/*nginx*
 sudo rm -f /etc/apt/sources.list.d/*mariadb*
+sudo rm -f /etc/apt/sources.list.d/mariadb.list /etc/apt/sources.list.d/mariadb-enterprise.list 2>/dev/null || true
+sudo rm -f /etc/apt/keyrings/mariadb.gpg 2>/dev/null || true
 sudo rm -f /etc/apt/sources.list.d/*redis*
+sudo rm -f /etc/apt/sources.list.d/redis.list 2>/dev/null || true
+sudo rm -f /etc/apt/keyrings/redis-archive-keyring.gpg 2>/dev/null || true
+sudo rm -f /etc/apt/sources.list.d/ondrej-php.list 2>/dev/null || true
+sudo rm -f /etc/apt/keyrings/ondrej-php.gpg 2>/dev/null || true
 
 echo " "
 echo "============================================="
@@ -501,10 +513,7 @@ sudo rm -rf /tmp/node-* 2>/dev/null || true
 sudo rm -rf /tmp/npm-* 2>/dev/null || true
 sudo rm -rf /tmp/php* 2>/dev/null || true
 
-# Remove snap directories if snapd was removed
-sudo rm -rf /snap 2>/dev/null || true
-sudo rm -rf /var/snap 2>/dev/null || true
-sudo rm -rf /var/lib/snapd 2>/dev/null || true
+# Snap directories are preserved (snapd no longer removed wholesale) — no rm -rf /snap
 
 log "✓ System caches and temporary files cleaned"
 

@@ -1506,9 +1506,14 @@ EOF
     
     # Enable the site
     sudo ln -sf /etc/nginx/sites-available/${PROJECT_NAME} /etc/nginx/sites-enabled/
-    
-    # Remove default site if exists
-    sudo rm -f /etc/nginx/sites-enabled/default
+
+    # Remove default site if it is the stock symlink
+    if [[ -L /etc/nginx/sites-enabled/default ]] && [[ "$(readlink -f /etc/nginx/sites-enabled/default 2>/dev/null)" == "/etc/nginx/sites-available/default" ]]; then
+        sudo rm -f /etc/nginx/sites-enabled/default
+        log "✓ Removed stock default site symlink"
+    elif [[ -f /etc/nginx/sites-enabled/default ]] && ! [[ -L /etc/nginx/sites-enabled/default ]]; then
+        warning "sites-enabled/default is a regular file (custom?) — leaving it"
+    fi
     
     log "✓ Nginx site configuration created and enabled: ${PROJECT_NAME}"
     
@@ -3190,66 +3195,45 @@ install_certbot() {
         return 0
     fi
     
-    # Try snap installation first (for Ubuntu systems with snap support)
-    if command -v snap &>/dev/null && systemctl is-active --quiet snapd 2>/dev/null; then
-        info "Using snap package manager for Certbot installation..."
-        
-        # Install via snap
-        if sudo snap install core 2>/dev/null && sudo snap refresh core 2>/dev/null; then
-            if sudo snap install --classic certbot; then
-                sudo ln -sf /snap/bin/certbot /usr/bin/certbot 2>/dev/null || true
-                log "✓ Certbot installed via snap"
-                info "Use 'sudo certbot --nginx' to obtain SSL certificates for your domains"
-                return 0
-            else
-                warning "Snap installation failed, trying alternative method..."
-            fi
-        else
-            warning "Snap core installation failed, trying alternative method..."
-        fi
-    fi
-    
-    # Alternative installation using system packages
-    info "Installing Certbot using system package manager..."
-    
-    # Update package list
-    sudo apt update
-    
-    # Install certbot and nginx plugin
-    if sudo apt install -y certbot python3-certbot-nginx; then
-        log "✓ Certbot installed via apt package manager"
-        info "Use 'sudo certbot --nginx' to obtain SSL certificates for your domains"
-        
-        # Verify installation
+    # Prefer apt on Ubuntu (especially 24.04 noble); snap as fallback
+    info "Installing Certbot via apt..."
+    wait_for_apt_lock
+    sudo apt update 2>&1 | tail -5 || true
+    if sudo apt install -y certbot python3-certbot-nginx 2>&1 | tail -10; then
+        log "✓ Certbot installed via apt"
         if command -v certbot &>/dev/null; then
-            local version=$(certbot --version 2>/dev/null | head -n1)
+            local version
+            version=$(certbot --version 2>/dev/null | head -n1 || echo "certbot installed")
             info "$version"
+        fi
+        sudo systemctl enable --now certbot.timer 2>/dev/null || sudo systemctl enable certbot.timer 2>/dev/null || true
+        if sudo certbot renew --dry-run 2>&1 | tail -10; then
+            log "✓ Certbot renew dry-run passed"
+        else
+            warning "Certbot renew dry-run failed — check: sudo certbot renew --dry-run"
+        fi
+        return 0
+    else
+        warning "apt Certbot install failed, trying snap fallback..."
+    fi
+
+    if command -v snap &>/dev/null && systemctl is-active --quiet snapd 2>/dev/null; then
+        info "Trying snap fallback for Certbot..."
+        sudo snap install core 2>/dev/null || true
+        sudo snap refresh core 2>/dev/null || true
+        if sudo snap install --classic certbot 2>&1 | tail -10; then
+            sudo ln -sf /snap/bin/certbot /usr/bin/certbot 2>/dev/null || true
+            log "✓ Certbot installed via snap"
+            sudo systemctl enable --now snap.certbot.renew.timer 2>/dev/null || true
             return 0
         else
-            error "Certbot installation verification failed"
-            return 1
-        fi
-    else
-        warning "Failed to install Certbot via apt, trying pip installation..."
-        
-        # Last resort: pip installation
-        if command -v pip3 &>/dev/null || sudo apt install -y python3-pip; then
-            if sudo pip3 install certbot certbot-nginx; then
-                log "✓ Certbot installed via pip"
-                info "Use 'sudo certbot --nginx' to obtain SSL certificates for your domains"
-                return 0
-            else
-                error "All Certbot installation methods failed"
-                warning "You can manually install Certbot later using:"
-                warning "  sudo apt install certbot python3-certbot-nginx"
-                return 1
-            fi
-        else
-            error "Could not install Certbot using any available method"
-            warning "Please install Certbot manually after the script completes"
-            return 1
+            warning "Snap Certbot install failed"
         fi
     fi
+
+    error "All Certbot installation methods failed"
+    warning "Install manually: sudo apt update && sudo apt install -y certbot python3-certbot-nginx"
+    return 1
 }
 
 # =========================================================================
@@ -3634,23 +3618,13 @@ main() {
     setup_laravel_scheduler
     configure_firewall
     
-    # Install Certbot (non-critical - continue if it fails)
-    if install_certbot; then
-        log "✓ Certbot installation completed successfully"
-    else
-        warning "Certbot installation failed, but continuing with LEMP stack setup"
-        info "You can install Certbot manually later using: sudo apt install certbot python3-certbot-nginx"
-    fi
-    
-    # Install SSL certificate if requested
-    # Note: SSL installation is now always manual - just install Certbot
-    info "Installing Certbot for SSL certificate management..."
+    # Install Certbot once (non-critical - continue if it fails)
     if install_certbot; then
         log "✓ Certbot installation completed successfully"
         info "SSL certificate can be installed manually after server setup is complete"
     else
         warning "Certbot installation failed, but continuing with LEMP stack setup"
-        info "You can install Certbot manually later using: sudo apt install certbot python3-certbot-nginx"
+        info "Install manually: sudo apt update && sudo apt install -y certbot python3-certbot-nginx"
     fi
 
     echo " "
@@ -3659,8 +3633,8 @@ main() {
     echo "============================================="
     info "Restarting services to ensure all components start properly..."
 
-    # Temporarily disable strict error handling for service restarts
-    set +e
+    # Temporarily disable strict error handling for service restarts (preserve pipefail/errexit flags)
+    set +Eeuo pipefail
 
     # Helper function to restart a service if it exists
     restart_service() {
@@ -3714,7 +3688,7 @@ main() {
     restart_service supervisor
     
     # Re-enable strict error handling
-    set -e
+    set -Eeuo pipefail
     
     echo " "
     info "Service restart operations completed."
@@ -3776,8 +3750,7 @@ main() {
 }
 
 
-# Trap any errors and exit gracefully
-trap 'error "Installation failed! Check the output above for details."; exit 1' ERR
+# Note: ERR trap already set to cleanup_on_error_with_lock above; no duplicate trap here
 
 
 # Run main installation
