@@ -2405,10 +2405,13 @@ install_composer() {
     
     # Check if Composer is already installed
     if command -v composer &>/dev/null; then
-        local current_version=$(composer --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -n1)
+        local current_version
+        current_version=$(composer --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -n1 || echo "unknown")
         warning "Composer already installed (version: $current_version)"
         info "Updating to latest version..."
-        sudo composer self-update || warning "Failed to update Composer"
+        if ! COMPOSER_ALLOW_SUPERUSER=1 composer self-update 2>&1 | tail -5; then
+            warning "Failed to update Composer (try: COMPOSER_ALLOW_SUPERUSER=1 composer self-update)"
+        fi
         return 0
     fi
     
@@ -2428,33 +2431,38 @@ install_composer() {
         fi
     done
     
-    # Download and verify Composer installer
+    # Download and verify Composer installer — fail-closed on signature mismatch
     info "Downloading Composer installer..."
-    local expected_signature="$(curl -s https://composer.github.io/installer.sig)"
+    local expected_signature
+    expected_signature="$(curl -fsSL --retry 3 https://composer.github.io/installer.sig 2>/dev/null || true)"
+    if [[ -z "$expected_signature" ]]; then
+        error "Failed to fetch Composer expected signature (https://composer.github.io/installer.sig)"
+        return 1
+    fi
+
     local installer_path="/tmp/composer-setup.php"
-    
-    if curl -s https://getcomposer.org/installer -o "$installer_path"; then
-        log "✓ Composer installer downloaded"
-    else
+    if ! curl -fsSL --retry 3 https://getcomposer.org/installer -o "$installer_path" 2>/dev/null; then
         error "Failed to download Composer installer"
         return 1
     fi
-    
-    # Verify installer signature
-    local actual_signature="$(php -r "echo hash_file('sha384', '$installer_path');")"
+    log "✓ Composer installer downloaded"
+
+    local actual_signature
+    actual_signature="$(php -r "echo hash_file('sha384', '$installer_path');")"
     if [[ "$expected_signature" == "$actual_signature" ]]; then
         log "✓ Composer installer signature verified"
     else
-        warning "Composer installer signature verification failed, but continuing..."
-    fi
-    
-    # Install Composer
-    info "Installing Composer using PHP ${PHP_VERSION}..."
-    if php${PHP_VERSION} "$installer_path" --install-dir=/tmp; then
-        sudo mv /tmp/composer.phar /usr/local/bin/composer
-        sudo chmod +x /usr/local/bin/composer
+        error "Composer installer signature mismatch — aborting (expected ${expected_signature:0:16}…, got ${actual_signature:0:16}…)"
         rm -f "$installer_path"
-        log "✓ Composer installed successfully"
+        return 1
+    fi
+
+    # Install directly to final location — avoids world-writable /tmp TOCTOU
+    info "Installing Composer using PHP ${PHP_VERSION}..."
+    if php${PHP_VERSION} "$installer_path" --install-dir=/usr/local/bin --filename=composer; then
+        sudo chmod +x /usr/local/bin/composer 2>/dev/null || true
+        rm -f "$installer_path"
+        log "✓ Composer installed successfully to /usr/local/bin/composer"
     else
         error "Composer installation failed"
         rm -f "$installer_path"
