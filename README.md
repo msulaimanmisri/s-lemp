@@ -70,12 +70,16 @@ chmod +x install.sh
 sudo ./install.sh
 ```
 
+> This fetches the companion `lib/services.sh` automatically on first run, so only `install.sh` needs to be downloaded manually.
+
 ### Method 2: One-Line Installation
 
 ```bash
 # Download and run in one command (interactive mode)
 wget -qO- https://raw.githubusercontent.com/msulaimanmisri/s-lemp/main/install.sh | sudo bash
 ```
+
+> The one-liner automatically fetches both `install.sh` and its companion `lib/services.sh` into a temporary directory and runs them, so no manual clone is required.
 
 ### Method 3: Non-Interactive Installation
 

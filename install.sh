@@ -4,9 +4,72 @@
 if [[ "${BASH_SOURCE[0]}" != "${0}" ]] && [[ -t 0 ]]; then
     echo "Error: This script should be executed directly, not sourced."
     echo "Usage: ./installation-script.sh [--non-interactive]"
-    echo "Hint: for piped install use: curl -fsSL https://raw.githubusercontent.com/msulaimanmisri/s-lemp/main/install.sh | sudo bash -s -- --help"
+    echo "Hint: this script must be executed, not sourced. For piped install use:"
+    echo "      wget -qO- https://raw.githubusercontent.com/msulaimanmisri/s-lemp/main/install.sh | sudo bash"
     exit 1
 fi
+
+# =========================================================================
+# Self-fetching bootstrap
+# install.sh requires lib/services.sh. Support both the documented install
+# methods: direct download (wget install.sh) and the piped one-liner
+# (wget -qO- ... | sudo bash). In the piped case there is no script file on
+# disk, so we fetch both files into a temp dir and re-exec. In the direct
+# case we fetch only the missing companion library next to this script.
+# =========================================================================
+RAW_BASE="https://raw.githubusercontent.com/msulaimanmisri/s-lemp/main"
+
+__slemp_download() {
+    # __slemp_download <url> <outfile>
+    if command -v wget >/dev/null 2>&1; then
+        wget -qO "$2" "$1"
+    elif command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$1" -o "$2"
+    else
+        return 1
+    fi
+}
+
+__slemp_bootstrap() {
+    local script_path="${BASH_SOURCE[0]:-$0}"
+
+    # Piped / stdin execution: no real script file on disk.
+    if [[ "$script_path" == "/dev/stdin" || "$script_path" == "-stdin" || ! -f "$script_path" ]]; then
+        local tmp
+        tmp="$(mktemp -d /tmp/s-lemp.XXXXXX)" || { echo "[ERROR] Cannot create temp directory" >&2; exit 1; }
+        echo "ℹ️  Piped install detected — fetching installer and library..." >&2
+        if ! __slemp_download "${RAW_BASE}/install.sh" "${tmp}/install.sh"; then
+            echo "[ERROR] Failed to download install.sh" >&2
+            rm -rf "$tmp"
+            exit 1
+        fi
+        mkdir -p "${tmp}/lib"
+        if ! __slemp_download "${RAW_BASE}/lib/services.sh" "${tmp}/lib/services.sh"; then
+            echo "[ERROR] Failed to download lib/services.sh" >&2
+            rm -rf "$tmp"
+            exit 1
+        fi
+        chmod +x "${tmp}/install.sh"
+        exec bash "${tmp}/install.sh" "$@"
+    fi
+
+    # Direct execution: ensure lib/services.sh sits next to this script.
+    local script_dir
+    script_dir="$(cd "$(dirname "$script_path")" && pwd)"
+    if [[ ! -f "${script_dir}/lib/services.sh" ]]; then
+        echo "ℹ️  Fetching companion library lib/services.sh ..." >&2
+        mkdir -p "${script_dir}/lib"
+        if ! __slemp_download "${RAW_BASE}/lib/services.sh" "${script_dir}/lib/services.sh"; then
+            echo "[ERROR] Missing services library and auto-download failed." >&2
+            echo "        Please clone the repository instead:" >&2
+            echo "          git clone https://github.com/msulaimanmisri/s-lemp.git && cd s-lemp && sudo ./install.sh" >&2
+            exit 1
+        fi
+        chmod +x "${script_dir}/lib/services.sh"
+    fi
+}
+
+__slemp_bootstrap "$@"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -1197,7 +1260,7 @@ if [[ -f "${SERVICES_LIB}" ]]; then
     source "${SERVICES_LIB}"
 else
     echo "[ERROR] Missing services library: ${SERVICES_LIB}" >&2
-    echo "        For piped install this is not yet supported — clone the repo and run ./install.sh" >&2
+    echo "        Re-run the installer, or clone the repo: git clone https://github.com/msulaimanmisri/s-lemp.git && cd s-lemp && sudo ./install.sh" >&2
     exit 1
 fi
 
