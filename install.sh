@@ -31,11 +31,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     
         --php-version)
-            if [[ "$2" == "8.3" ]] || [[ "$2" == "8.4" ]]; then
+            if [[ "$2" == "8.3" ]] || [[ "$2" == "8.4" ]] || [[ "$2" == "8.5" ]]; then
                 PHP_VERSION="$2"
                 shift 2
             else
-                echo "Error: Invalid PHP version. Use 8.3 or 8.4"
+                echo "Error: Invalid PHP version. Use 8.3, 8.4 or 8.5"
                 exit 1
             fi
             ;;
@@ -68,7 +68,7 @@ while [[ $# -gt 0 ]]; do
 
             echo "Options:"
             echo "  --non-interactive, -n       Run in non-interactive mode with defaults"
-            echo "  --php-version VERSION       Set PHP version (8.3 or 8.4)"
+            echo "  --php-version VERSION       Set PHP version (8.3, 8.4 or 8.5)"
             echo "  --queue-driver DRIVER       Set queue driver (redis or database)"
             echo "  --skip-database             Skip MariaDB installation (use external database)"
             echo "  --skip-redis                Skip Redis installation (use external cache/sessions)"
@@ -696,7 +696,8 @@ run_configuration_wizard() {
     echo ""
     info "PHP Version Selection:"
     echo "  1) PHP 8.3 LTS (Recommended for production)"
-    echo "  2) PHP 8.4 (Latest stable)"
+    echo "  2) PHP 8.4 (Stable)"
+    echo "  3) PHP 8.5 (Latest stable, recommended)"
     echo ""
     
     while true; do
@@ -714,8 +715,13 @@ run_configuration_wizard() {
                 log "✓ Selected PHP 8.4"
                 break
                 ;;
+            3)
+                PHP_VERSION="8.5"
+                log "✓ Selected PHP 8.5"
+                break
+                ;;
             *)
-                error "Please choose option 1 or 2"
+                error "Please choose option 1, 2 or 3"
                 ;;
         esac
     done
@@ -1397,9 +1403,12 @@ configure_opcache_settings() {
         "/etc/php/${PHP_VERSION}/cli/conf.d/10-opcache.ini"
     )
     
-    # OPcache configuration optimized for Laravel
+    # OPcache configuration optimized for Laravel (production)
+    # validate_timestamps=0 is optimal for production — code changes require
+    # `php artisan opcache:clear`, `cachetool opcache:reset`, or `systemctl reload php*-fpm`.
+    # For development set opcache.validate_timestamps=1 and opcache.revalidate_freq=2.
     local opcache_config="
-; OPcache Configuration for Laravel
+; OPcache Configuration for Laravel — production defaults
 ; Enable OPcache
 opcache.enable=1
 opcache.enable_cli=1
@@ -1409,11 +1418,15 @@ opcache.memory_consumption=256
 opcache.interned_strings_buffer=16
 opcache.max_accelerated_files=10000
 
-; Performance settings
-opcache.revalidate_freq=2
-opcache.fast_shutdown=1
+; Performance settings — production: no timestamp checks (fastest)
+opcache.validate_timestamps=0
+opcache.revalidate_freq=0
 opcache.save_comments=1
-opcache.validate_timestamps=1
+opcache.enable_file_override=1
+
+; JIT — tracing mode is the recommended default for PHP 8.3+
+opcache.jit=tracing
+opcache.jit_buffer_size=100M
 
 ; Laravel-specific optimizations
 opcache.max_wasted_percentage=10
@@ -1613,7 +1626,8 @@ verify_php_extensions() {
                 echo '  • Memory consumption: ' . ini_get('opcache.memory_consumption') . ' MB' . PHP_EOL;
                 echo '  • Max accelerated files: ' . ini_get('opcache.max_accelerated_files') . PHP_EOL;
                 echo '  • Revalidate frequency: ' . ini_get('opcache.revalidate_freq') . ' seconds' . PHP_EOL;
-                echo '  • Fast shutdown: ' . (ini_get('opcache.fast_shutdown') ? 'enabled' : 'disabled') . PHP_EOL;
+                echo '  • JIT buffer: ' . ini_get('opcache.jit_buffer_size') . PHP_EOL;
+                echo '  • JIT mode: ' . ini_get('opcache.jit') . PHP_EOL;
             " 2>/dev/null || info "  Unable to read OPcache configuration"
         else
             warning "⚠ OPcache extension is loaded but not enabled"
@@ -1765,19 +1779,17 @@ php_admin_flag[display_errors] = off
 php_admin_flag[log_errors] = on
 php_admin_value[error_log] = /var/log/php/${PROJECT_NAME}-error.log
 
-; Laravel optimizations with enhanced OPcache
-php_admin_value[opcache.enable] = 1
-php_admin_value[opcache.memory_consumption] = 256
-php_admin_value[opcache.interned_strings_buffer] = 16
-php_admin_value[opcache.max_accelerated_files] = 10000
-php_admin_value[opcache.revalidate_freq] = 2
-php_admin_value[opcache.fast_shutdown] = 1
-php_admin_value[opcache.enable_cli] = 1
-php_admin_value[opcache.save_comments] = 1
-php_admin_value[opcache.validate_timestamps] = 1
+; Laravel optimizations — keep pool light; authoritative OPcache/JIT settings live in 10-opcache.ini
+; Only pool-scoped overrides here; do not duplicate global OPcache directives.
+php_admin_flag[expose_php] = off
+php_admin_value[cgi.fix_pathinfo] = 0
+
+php_admin_value[session.cookie_httponly] = 1
+php_admin_value[session.cookie_secure] = 1
+php_admin_value[session.use_strict_mode] = 1
 
 ; Additional performance settings
-php_admin_value[realpath_cache_size] = 2M
+php_admin_value[realpath_cache_size] = 4096K
 php_admin_value[realpath_cache_ttl] = 7200
 EOF
     
