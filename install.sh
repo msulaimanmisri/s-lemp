@@ -195,28 +195,56 @@ cleanup_on_error() {
     exit $exit_code
 }
 
-trap 'cleanup_on_error $LINENO' ERR
 export DEBIAN_FRONTEND=noninteractive
 
-# Lock file to prevent multiple instances
-LOCK_FILE="/tmp/lemp_install.lock"
+# Lock file — prefer /var/lock (root-owned, 755) over world-writable /tmp
+LOCK_FILE="/var/lock/lemp_install.lock"
+if [[ ! -d /var/lock ]]; then
+    LOCK_FILE="/tmp/lemp_install.lock"
+fi
 
 # Cleanup lock file on exit
 cleanup_lock() {
-    rm -f "$LOCK_FILE"
+    rm -f "$LOCK_FILE" 2>/dev/null || true
 }
 
+cleanup_on_error_with_lock() {
+    local line_number=$1
+    cleanup_on_error "$line_number"
+    cleanup_lock
+}
+
+trap 'cleanup_on_error_with_lock $LINENO' ERR
 trap cleanup_lock EXIT
 
-# Create lock to prevent concurrent installations
+# Create lock to prevent concurrent installations — uses flock when available
 create_lock() {
-    if [ -f "$LOCK_FILE" ]; then
+    if command -v flock >/dev/null 2>&1; then
+        exec 9>"$LOCK_FILE" 2>/dev/null || {
+            error "Cannot open lock file $LOCK_FILE"
+            exit 1
+        }
+        if ! flock -n 9 2>/dev/null; then
+            error "Another instance of this script is already running (lock: $LOCK_FILE)."
+            info "If you're sure no other instance is running, remove the lock file:"
+            info "sudo rm -f $LOCK_FILE"
+            exit 1
+        fi
+        echo $$ >&9 2>/dev/null || true
+        return 0
+    fi
+
+    # Fallback: atomic symlink-style check (no flock)
+    if [[ -f "$LOCK_FILE" ]]; then
         error "Another instance of this script is already running or was terminated unexpectedly."
         info "If you're sure no other instance is running, remove the lock file:"
-        info "sudo rm $LOCK_FILE"
+        info "sudo rm -f $LOCK_FILE"
         exit 1
     fi
-    echo $$ > "$LOCK_FILE"
+    if ! ( set -C; echo $$ > "$LOCK_FILE" ) 2>/dev/null; then
+        error "Failed to acquire lock $LOCK_FILE — another instance may be running."
+        exit 1
+    fi
 }
 
 # =================================================================================
@@ -369,42 +397,31 @@ check_password_strength() {
 }
 
 # Function to generate a secure random password
+# Charset intentionally excludes shell/SQL/Redis-unsafe chars: ' " ` $ \ / & ; | < > ! ( ) { }
 generate_password() {
     local length=${1:-16}
-    
-    # Try multiple methods to generate password
-    local password=""
-    
-    # Method 1: Use /dev/urandom with tr (most secure)
+    local safe_chars='A-Za-z0-9#%^*+=-_'
+
     if [[ -r /dev/urandom ]] && command -v tr >/dev/null 2>&1; then
-        password=$(tr -dc 'A-Za-z0-9!@#$%^&*()_+=' < /dev/urandom 2>/dev/null | head -c "$length" 2>/dev/null || true)
+        local pw
+        pw=$(tr -dc "$safe_chars" < /dev/urandom 2>/dev/null | head -c "$length" 2>/dev/null || true)
+        if [[ ${#pw} -eq "$length" ]]; then
+            echo "$pw"
+            return 0
+        fi
     fi
-    
-    # Method 2: Use openssl if tr method failed
-    if [[ -z "$password" ]] && command -v openssl >/dev/null 2>&1; then
-        password=$(openssl rand -base64 $((length * 2)) 2>/dev/null | tr -dc 'A-Za-z0-9!@#$%^&*()_+=' | head -c "$length" 2>/dev/null || true)
+
+    if command -v openssl >/dev/null 2>&1; then
+        local pw2
+        pw2=$(openssl rand -base64 $((length * 3)) 2>/dev/null | tr -dc "$safe_chars" | head -c "$length" 2>/dev/null || true)
+        if [[ ${#pw2} -eq "$length" ]]; then
+            echo "$pw2"
+            return 0
+        fi
     fi
-    
-    # Method 3: Fallback to simple random method
-    if [[ -z "$password" ]]; then
-        local chars="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+="
-        for ((i=0; i<length; i++)); do
-            password+="${chars:$((RANDOM % ${#chars})):1}"
-        done
-    fi
-    
-    # Ensure we have a password of the right length
-    if [[ ${#password} -lt "$length" ]]; then
-        # Pad with simple characters if needed
-        while [[ ${#password} -lt "$length" ]]; do
-            password+="$(printf "%c" $((65 + RANDOM % 26)))"
-        done
-    fi
-    
-    # Truncate if too long
-    password="${password:0:$length}"
-    
-    echo "$password"
+
+    error "Failed to generate secure password (no /dev/urandom or openssl)"
+    return 1
 }
 
 # Function to display S-LEMP banner
@@ -963,17 +980,17 @@ show_configuration_summary() {
     echo ""
 }
 
-# Function to save configuration to a file
+# Function to save configuration to a file — secrets stored 600, no world-readable /tmp copy
 save_configuration_file() {
-    local config_file="/tmp/laravel_lemp_config.txt"
-    
-    # Remove existing config file if it exists
-    rm -f "$config_file" 2>/dev/null || true
-    
-    # Create the configuration file with proper error handling
-    if cat > "$config_file" 2>/dev/null <<EOF
+    local config_file="/root/laravel_lemp_config.txt"
+
+    local tmp_file
+    tmp_file=$(mktemp /root/.lemp_config.XXXXXX 2>/dev/null || mktemp /tmp/.lemp_config.XXXXXX)
+
+    cat > "$tmp_file" 2>/dev/null <<EOF
 # S-LEMP Stack Configuration
-# Generated on: $(date)
+# Generated on: $(date -Iseconds 2>/dev/null || date)
+# Permissions: 600 — contains secrets, do not share or commit
 
 PROJECT_NAME=$PROJECT_NAME
 DOMAIN_NAME=$DOMAIN_NAME
@@ -1012,62 +1029,20 @@ INSTALL_SSL=$INSTALL_SSL
 # Supervisor status: sudo supervisorctl status
 # SSL setup: sudo certbot --nginx -d $DOMAIN_NAME --email $SSL_EMAIL --agree-tos
 EOF
-    then
-        # Ensure proper permissions
-        chmod 644 "$config_file" 2>/dev/null || true
-        info "Configuration saved to: $config_file"
+
+    chmod 600 "$tmp_file" 2>/dev/null || true
+
+    if sudo install -m 600 "$tmp_file" "$config_file" 2>/dev/null || install -m 600 "$tmp_file" "$config_file" 2>/dev/null || cp "$tmp_file" "$config_file" 2>/dev/null; then
+        sudo chmod 600 "$config_file" 2>/dev/null || chmod 600 "$config_file" 2>/dev/null || true
+        sudo chown root:root "$config_file" 2>/dev/null || true
+        rm -f "$tmp_file" 2>/dev/null || true
+        # Remove any legacy world-readable copy if it exists
+        sudo rm -f /tmp/laravel_lemp_config.txt 2>/dev/null || rm -f /tmp/laravel_lemp_config.txt 2>/dev/null || true
+        info "Configuration saved to: $config_file (600)"
         echo ""
     else
-        warning "Failed to save configuration to $config_file - continuing without saving"
-        # Try alternative location if /tmp fails
-        local alt_config_file="/root/laravel_lemp_config.txt"
-        if cat > "$alt_config_file" 2>/dev/null <<EOF
-# S-LEMP Stack Configuration
-# Generated on: $(date)
-
-PROJECT_NAME=$PROJECT_NAME
-DOMAIN_NAME=$DOMAIN_NAME
-SSL_EMAIL=$SSL_EMAIL
-PROJECT_ROOT=$PROJECT_ROOT
-
-INSTALL_DATABASE=$INSTALL_DATABASE
-DB_NAME=$DB_NAME
-DB_USER=$DB_USER
-DB_PASSWORD=$DB_PASSWORD
-DB_ROOT_PASSWORD=$DB_ROOT_PASSWORD
-
-INSTALL_REDIS=$INSTALL_REDIS
-REDIS_VERSION=$REDIS_VERSION
-REDIS_PASSWORD=$REDIS_PASSWORD
-SUPERVISOR_PROCESS_NUM=$SUPERVISOR_PROCESS_NUM
-QUEUE_DRIVER=$QUEUE_DRIVER
-PHP_VERSION=$PHP_VERSION
-MARIADB_VERSION=$MARIADB_VERSION
-NODE_JS_VERSION=$NODE_JS_VERSION
-INSTALL_SSL=$INSTALL_SSL
-
-# Access URLs after installation:
-# HTTP: http://$DOMAIN_NAME
-# HTTPS: https://$DOMAIN_NAME (after SSL setup)
-
-# Database Connection:$(if [[ "$INSTALL_DATABASE" == "true" ]]; then echo "
-# Host: localhost
-# Database: $DB_NAME
-# Username: $DB_USER
-# Password: [see above]"; else echo "
-# Database installation was skipped - configure external database in your Laravel .env file"; fi)
-
-# Important Commands:
-# Fix Laravel permissions: fix-laravel-permissions $PROJECT_ROOT/$PROJECT_NAME
-# Supervisor status: sudo supervisorctl status
-# SSL setup: sudo certbot --nginx -d $DOMAIN_NAME --email $SSL_EMAIL --agree-tos
-EOF
-        then
-            chmod 644 "$alt_config_file" 2>/dev/null || true
-            info "Configuration saved to alternative location: $alt_config_file"
-        else
-            warning "Could not save configuration file to any location"
-        fi
+        warning "Failed to save configuration to $config_file"
+        rm -f "$tmp_file" 2>/dev/null || true
     fi
 }
 
@@ -2880,47 +2855,60 @@ create_laravel_permission_helper() {
     echo -e "${GREEN}Creating Laravel permission helper script...${NC}"
     echo "============================================="
     
-    # Create Laravel permission script
+    # Create Laravel permission script — hardened: path guard + quoted vars + set -u
     sudo tee /usr/local/bin/fix-laravel-permissions > /dev/null <<'EOF'
 #!/bin/bash
+set -u
 
 # Laravel Permission Fixer Script
 # Usage: fix-laravel-permissions [project-path]
 
-PROJECT_PATH=${1:-"/var/www"}
+PROJECT_PATH="${1:-/var/www}"
 WEBSERVER_USER="www-data"
 WEBSERVER_GROUP="www-data"
 
-if [ ! -d "$PROJECT_PATH" ]; then
+if [[ "$PROJECT_PATH" != /var/www/* ]]; then
+    echo "Error: Refusing to operate outside /var/www (got: $PROJECT_PATH)"
+    exit 1
+fi
+
+if [[ ! -d "$PROJECT_PATH" ]]; then
     echo "Error: Directory $PROJECT_PATH does not exist"
+    exit 1
+fi
+
+# Resolve symlinks and re-check prefix (defense in depth)
+RESOLVED="$(realpath -m "$PROJECT_PATH" 2>/dev/null || echo "$PROJECT_PATH")"
+if [[ "$RESOLVED" != /var/www/* ]]; then
+    echo "Error: Resolved path outside /var/www (got: $RESOLVED)"
     exit 1
 fi
 
 echo "Setting Laravel permissions for: $PROJECT_PATH"
 
 # Set ownership
-chown -R $WEBSERVER_USER:$WEBSERVER_GROUP $PROJECT_PATH
+chown -R "$WEBSERVER_USER:$WEBSERVER_GROUP" "$PROJECT_PATH"
 
 # Set base permissions
-find $PROJECT_PATH -type d -exec chmod 755 {} \;
-find $PROJECT_PATH -type f -exec chmod 644 {} \;
+find "$PROJECT_PATH" -type d -exec chmod 755 {} \;
+find "$PROJECT_PATH" -type f -exec chmod 644 {} \;
 
 # Set Laravel-specific permissions
-if [ -d "$PROJECT_PATH/storage" ]; then
-    chmod -R 775 $PROJECT_PATH/storage
-    chown -R $WEBSERVER_USER:$WEBSERVER_GROUP $PROJECT_PATH/storage
+if [[ -d "$PROJECT_PATH/storage" ]]; then
+    chmod -R 775 "$PROJECT_PATH/storage"
+    chown -R "$WEBSERVER_USER:$WEBSERVER_GROUP" "$PROJECT_PATH/storage"
     echo "✓ Storage directory permissions set"
 fi
 
-if [ -d "$PROJECT_PATH/bootstrap/cache" ]; then
-    chmod -R 775 $PROJECT_PATH/bootstrap/cache
-    chown -R $WEBSERVER_USER:$WEBSERVER_GROUP $PROJECT_PATH/bootstrap/cache
+if [[ -d "$PROJECT_PATH/bootstrap/cache" ]]; then
+    chmod -R 775 "$PROJECT_PATH/bootstrap/cache"
+    chown -R "$WEBSERVER_USER:$WEBSERVER_GROUP" "$PROJECT_PATH/bootstrap/cache"
     echo "✓ Bootstrap cache permissions set"
 fi
 
 # Make artisan executable if exists
-if [ -f "$PROJECT_PATH/artisan" ]; then
-    chmod +x $PROJECT_PATH/artisan
+if [[ -f "$PROJECT_PATH/artisan" ]]; then
+    chmod +x "$PROJECT_PATH/artisan"
     echo "✓ Artisan made executable"
 fi
 
@@ -3033,15 +3021,27 @@ configure_firewall() {
         echo "============================================="
     fi
 
-    # Reset to defaults (force to avoid prompts)
+    # Reset — only if inactive; otherwise backup before reset
     echo " "
     echo "============================================="
-    echo -e "${GREEN}Resetting UFW to default configuration...${NC}"
+    echo -e "${GREEN}Preparing UFW...${NC}"
     echo "============================================="
-    echo "y" | sudo ufw --force reset || {
-        error "Failed to reset UFW"
-        return 1
-    }
+
+    if sudo ufw status 2>/dev/null | grep -q "Status: active"; then
+        warning "UFW is already active — backing up current rules before reset"
+        sudo ufw status verbose > "/tmp/ufw.backup.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+        sudo ufw status numbered > "/tmp/ufw.backup-numbered.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+        info "Backups: /tmp/ufw.backup.*"
+        sudo ufw --force reset || {
+            error "Failed to reset UFW"
+            return 1
+        }
+    else
+        sudo ufw --force reset || {
+            error "Failed to reset UFW"
+            return 1
+        }
+    fi
 
     # Configure default policies
     echo " "
@@ -3057,19 +3057,37 @@ configure_firewall() {
         return 1
     }
 
-    # Allow SSH with rate limiting (prevents brute force attacks)
+    # Allow SSH with rate limiting — single rule, auto-detect custom port
     echo " "
     echo "============================================="
     echo -e "${GREEN}Configuring SSH access with rate limiting...${NC}"
     echo "============================================="
-    sudo ufw limit ssh/tcp || {
-        error "Failed to configure SSH with rate limiting"
-        return 1
-    }
-    sudo ufw allow 22/tcp || {
-        error "Failed to allow SSH port 22"
-        return 1
-    }
+
+    local ssh_port="22"
+    local detected_port
+    detected_port=$(grep -E '^\s*Port\s+' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | head -1 || true)
+    if [[ -n "$detected_port" ]] && [[ "$detected_port" =~ ^[0-9]+$ ]]; then
+        ssh_port="$detected_port"
+        if [[ "$ssh_port" != "22" ]]; then
+            info "Detected custom SSH port: $ssh_port (from /etc/ssh/sshd_config)"
+        fi
+    fi
+
+    # Prefer OpenSSH app profile when on default port; otherwise limit the detected port
+    if [[ "$ssh_port" == "22" ]] && sudo ufw app info OpenSSH >/dev/null 2>&1; then
+        sudo ufw limit OpenSSH comment 'SSH rate-limited' || {
+            error "Failed to configure SSH rate limiting (OpenSSH profile)"
+            return 1
+        }
+    else
+        sudo ufw limit "${ssh_port}/tcp" comment 'SSH rate-limited' || {
+            error "Failed to configure SSH rate limiting on port ${ssh_port}"
+            return 1
+        }
+        if [[ "$ssh_port" != "22" ]]; then
+            warning "Custom SSH port ${ssh_port} configured — ensure your client uses -p ${ssh_port}"
+        fi
+    fi
 
     # Allow HTTP and HTTPS for web traffic
     echo " "
@@ -3092,12 +3110,16 @@ configure_firewall() {
     echo "============================================="
     sudo sed -i 's/IPV6=no/IPV6=yes/' /etc/default/ufw 2>/dev/null || true
 
-    # Enable UFW with force flag
+    # Enable logging and apply IPv6 change
+    sudo ufw logging on 2>/dev/null || true
+    sudo ufw reload 2>/dev/null || true
+
+    # Enable UFW
     echo " "
     echo "============================================="
     echo -e "${GREEN}Enabling UFW firewall...${NC}"
     echo "============================================="
-    echo "y" | sudo ufw --force enable || {
+    sudo ufw --force enable || {
         error "Failed to enable UFW"
         return 1
     }
@@ -3538,7 +3560,7 @@ main() {
     # Show S-LEMP banner for all modes
     show_slemp_banner
 
-    # check_root
+    check_root
     check_ubuntu
 
     # Show welcome message
