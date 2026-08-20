@@ -6,15 +6,15 @@
 # @author Sulaiman Misri
 # @web https://sulaimanmisri.com
 
-# Remove strict error handling for more graceful cleanup
 set -Eeuo pipefail
 trap 'echo "[ERROR] Line $LINENO exited with status $?" >&2' ERR
+export DEBIAN_FRONTEND=noninteractive
 
 # =================================================================================
 # GLOBAL VARIABLES
 # =================================================================================
-PHP_VERSION="8.3"
 SKIP_MARIADB_CONFIRM="false"
+SUPPORTED_PHP_VERSIONS=("8.3" "8.4" "8.5")
 
 # Colors for output
 RED='\033[0;31m'
@@ -28,6 +28,10 @@ log() {
     echo -e "${GREEN}[INFO] $1${NC}"
 }
 
+info() {
+    echo -e "${BLUE}[INFO] $1${NC}"
+}
+
 warning() {
     echo -e "${YELLOW}[WARNING] $1${NC}"
 }
@@ -36,41 +40,30 @@ error() {
     echo -e "${RED}[ERROR] $1${NC}"
 }
 
-# Function to safely stop and disable services, and remove orphaned systemd units
 safe_stop_service() {
     local service_name=$1
     echo "Stopping $service_name service..."
-    if systemctl is-active --quiet $service_name 2>/dev/null; then
-        sudo systemctl stop $service_name || warning "Failed to stop $service_name"
+    if systemctl is-active --quiet "$service_name" 2>/dev/null; then
+        sudo systemctl stop "$service_name" || warning "Failed to stop $service_name"
     else
         log "$service_name service is not running"
     fi
-    if systemctl is-enabled --quiet $service_name 2>/dev/null; then
-        sudo systemctl disable $service_name || warning "Failed to disable $service_name"
+    if systemctl is-enabled --quiet "$service_name" 2>/dev/null; then
+        sudo systemctl disable "$service_name" || warning "Failed to disable $service_name"
     else
         log "$service_name service is not enabled"
     fi
-    # Remove orphaned systemd unit files if present
-    if [ -f "/usr/lib/systemd/system/${service_name}.service" ]; then
-        sudo rm -f "/usr/lib/systemd/system/${service_name}.service"
-        log "Removed orphaned systemd unit: /usr/lib/systemd/system/${service_name}.service"
-    fi
-    if [ -f "/lib/systemd/system/${service_name}.service" ]; then
-        sudo rm -f "/lib/systemd/system/${service_name}.service"
-        log "Removed orphaned systemd unit: /lib/systemd/system/${service_name}.service"
-    fi
 }
 
-# Function to wait for apt locks to be released
 wait_for_apt_lock() {
-    local timeout=300  # 5 minutes timeout
+    local timeout=300
     local elapsed=0
-    
-    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/lib/dpkg/lock >/dev/null 2>&1; do
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/lib/dpkg/lock >/dev/null 2>&1 || fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
         if [ $elapsed -ge $timeout ]; then
             warning "Timeout waiting for apt lock, forcing cleanup..."
             sudo killall apt apt-get dpkg 2>/dev/null || true
             sleep 5
+            sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null || true
             break
         fi
         echo "Waiting for package manager lock... ($elapsed/$timeout seconds)"
@@ -151,24 +144,6 @@ remove_laravel_cronjobs() {
         log "No crontab exists for www-data user"
     fi
     
-    # Also remove any system-wide cron files that might contain Laravel scheduler
-    log "Checking system-wide cron directories..."
-    
-    # Check /etc/cron.d/ for Laravel-related files
-    if ls /etc/cron.d/*laravel* >/dev/null 2>&1; then
-        sudo rm -f /etc/cron.d/*laravel*
-        log "✓ Removed Laravel-related files from /etc/cron.d/"
-    fi
-    
-    # Check for any cron files mentioning schedule:run
-    local cron_files_with_laravel=$(grep -l "schedule:run" /etc/cron.d/* 2>/dev/null || true)
-    if [[ -n "$cron_files_with_laravel" ]]; then
-        for file in $cron_files_with_laravel; do
-            sudo rm -f "$file"
-            log "✓ Removed Laravel scheduler from: $file"
-        done
-    fi
-    
     log "✓ Laravel cronjob cleanup completed"
 }
 
@@ -210,42 +185,32 @@ wait_for_apt_lock
 sudo apt-get -f install -y || warning "Failed to fix some dependencies"
 
 safe_stop_service "nginx"
-safe_stop_service "php${PHP_VERSION}-fpm"
-safe_stop_service "php8.4-fpm"
+for ver in "${SUPPORTED_PHP_VERSIONS[@]}"; do
+    safe_stop_service "php${ver}-fpm"
+done
 safe_stop_service "php-fpm"
 safe_stop_service "mariadb"
 safe_stop_service "mysql"
 safe_stop_service "redis-server"
 safe_stop_service "supervisor"
 safe_stop_service "certbot.timer"
+safe_stop_service "snap.certbot.renew.timer"
 safe_stop_service "apache2"
-safe_stop_service "httpd"
-safe_stop_service "apache2-bin"
-safe_stop_service "apache2-utils"
 
-# Reload systemd daemon after unit file removal
-sudo systemctl daemon-reload
+sudo systemctl daemon-reload 2>/dev/null || true
 
 echo " "
 echo "============================================="
 echo "Step 2: Removing PHP and ALL related extensions"
 echo "============================================="
-# Remove ALL PHP versions and extensions (including held packages)
 wait_for_apt_lock
 sudo apt-get purge --allow-change-held-packages -y 'php*' 'libapache2-mod-php*'
-# Remove any remaining config files and dependencies
-wait_for_apt_lock
-sudo apt-get autoremove --purge -y
-wait_for_apt_lock
-sudo apt-get autoclean
-# Remove PHP directories (be careful!)
-sudo rm -rf /etc/php /var/log/php /run/php /usr/lib/php* /usr/share/php*
 
 echo " "
 echo "============================================="
 echo "Step 3: Removing Nginx"
 echo "============================================="
-safe_remove_packages "nginx" "nginx-common" "nginx-core" "nginx-full" "nginx-extras"
+safe_remove_packages "nginx"
 
 echo " "
 echo "============================================="
@@ -285,32 +250,29 @@ echo " "
 echo "============================================="
 echo "Step 8: Removing Certbot and SSL"
 echo "============================================="
-safe_remove_packages "certbot" "python3-certbot-nginx" "snapd"
+if snap list 2>/dev/null | grep -q "^certbot "; then
+    sudo snap remove --purge certbot 2>/dev/null || warning "Failed to remove certbot snap"
+    sudo rm -f /snap/bin/certbot 2>/dev/null || true
+    log "✓ Removed certbot snap (snapd preserved)"
+else
+    log "No certbot snap found — skipping snap removal"
+fi
+safe_remove_packages "certbot" "python3-certbot-nginx"
 
 echo " "
 echo "============================================="
 echo "Step 9: Removing Apache (if present)"
 echo "============================================="
-safe_remove_packages "apache2" "apache2-bin" "apache2-utils" "libapache2-mod-*"
-
-# Additional thorough Apache removal
-log "Performing thorough Apache removal..."
-# Get all installed packages containing 'apache' and remove them
 apache_packages=$(dpkg -l 2>/dev/null | grep -i apache | awk '{print $2}' | tr '\n' ' ' 2>/dev/null || true)
 if [[ -n "$apache_packages" && "$apache_packages" != " " ]]; then
-    echo "Found additional Apache packages: $apache_packages"
+    echo "Found Apache packages: $apache_packages"
     wait_for_apt_lock
     sudo apt-get remove --purge -y $apache_packages 2>/dev/null || warning "Failed to remove some Apache packages"
 else
-    log "No additional Apache packages found"
+    log "No Apache packages found"
 fi
-
-# Remove Apache directories and configurations
-sudo rm -rf /etc/apache2
-sudo rm -rf /var/www/html
-sudo rm -rf /var/log/apache2
-sudo rm -rf /usr/lib/apache2
-sudo rm -rf /usr/share/apache2
+sudo rm -rf /etc/apache2 2>/dev/null || true
+sudo rm -rf /var/log/apache2 2>/dev/null || true
 
 echo " "
 echo "============================================="
@@ -318,7 +280,6 @@ echo "Step 10: Removing configuration files and directories"
 echo "============================================="
 log "Removing Composer..."
 wait_for_apt_lock
-sudo rm -f /usr/local/bin/composer
 sudo rm -f /usr/local/bin/composer
 sudo rm -f /usr/bin/composer
 rm -f composer.phar 2>/dev/null || true
@@ -330,50 +291,50 @@ if dpkg -l 2>/dev/null | grep -q "^ii.*composer" 2>/dev/null; then
 fi
 
 log "Removing SSL certificates..."
-sudo rm -rf /etc/letsencrypt
-sudo rm -rf /etc/ssl/certs/*laravel*
-sudo rm -rf /etc/ssl/private/*laravel*
+sudo rm -rf /etc/letsencrypt 2>/dev/null || true
+sudo rm -rf /var/log/letsencrypt 2>/dev/null || true
+sudo rm -rf /var/lib/letsencrypt 2>/dev/null || true
 
 log "Removing project directories..."
-sudo rm -rf /var/www/laravel*
-sudo rm -rf /var/www/html/*
-sudo rm -rf /var/www/*
+sudo rm -rf /var/www/laravel* 2>/dev/null || true
+sudo rm -rf /var/www/html 2>/dev/null || true
 
 log "Removing Nginx configurations..."
-sudo rm -f /etc/nginx/sites-available/laravel*
-sudo rm -f /etc/nginx/sites-enabled/laravel*
-sudo rm -rf /etc/nginx/sites-available/*
-sudo rm -rf /etc/nginx/sites-enabled/*
-sudo rm -rf /etc/nginx/conf.d/*
+sudo rm -f /etc/nginx/conf.d/rate-limit.conf 2>/dev/null || true
+sudo rm -f /etc/nginx/nginx.conf.bak.* 2>/dev/null || true
+sudo rm -f /etc/nginx/sites-available/laravel* 2>/dev/null || true
+sudo rm -f /etc/nginx/sites-enabled/laravel* 2>/dev/null || true
 
-log "Removing PHP configurations..."
-sudo rm -rf /etc/php
-sudo rm -rf /var/log/php
-
-log "Removing MariaDB/MySQL data (WARNING: This deletes ALL databases!)..."
-sudo rm -rf /var/lib/mysql
-sudo rm -rf /etc/mysql
-sudo rm -rf /var/lib/mysql-files
-sudo rm -rf /var/lib/mysql-keyring
+log "Removing MariaDB data (WARNING: This deletes ALL databases!)..."
+sudo rm -rf /var/lib/mysql 2>/dev/null || true
+sudo rm -rf /var/log/mysql 2>/dev/null || true
+sudo rm -rf /etc/mysql 2>/dev/null || true
 
 log "Removing Redis data..."
-sudo rm -rf /var/lib/redis
-sudo rm -rf /etc/redis
+sudo rm -rf /var/lib/redis 2>/dev/null || true
+sudo rm -f /etc/redis/users.acl 2>/dev/null || true
+sudo rm -f /etc/redis/redis.conf.backup 2>/dev/null || true
 
-log "Removing Supervisor configurations..."
-sudo rm -rf /etc/supervisor
+log "Removing Supervisor queue configs..."
+sudo rm -f /etc/supervisor/conf.d/*queue.conf 2>/dev/null || true
 
-log "Removing Apache configurations..."
-sudo rm -rf /etc/apache2
+log "Removing secrets and installer artifacts..."
+if command -v shred >/dev/null 2>&1 && [[ -f /root/laravel_lemp_config.txt ]]; then
+    sudo shred -u /root/laravel_lemp_config.txt 2>/dev/null || sudo rm -f /root/laravel_lemp_config.txt 2>/dev/null || true
+else
+    sudo rm -f /root/laravel_lemp_config.txt 2>/dev/null || true
+fi
+sudo rm -f /root/.lemp_config.* /tmp/.lemp_config.* /tmp/laravel_lemp_config.txt 2>/dev/null || true
+sudo rm -f /var/lock/lemp_install.lock /tmp/lemp_install.lock /tmp/ufw.backup.* 2>/dev/null || true
+sudo rm -f /etc/logrotate.d/php-fpm-* 2>/dev/null || true
+sudo rm -f /etc/php/*/opcache-blacklist.txt 2>/dev/null || true
+sudo rm -f /etc/php/*/fpm/conf.d/10-opcache.ini.backup.* /etc/php/*/cli/conf.d/10-opcache.ini.backup.* 2>/dev/null || true
 
 echo " "
 echo "============================================="
-echo "Step 11: Removing helper scripts and aliases"
+echo "Step 11: Removing helper scripts"
 echo "============================================="
-sudo rm -f /usr/local/bin/create-laravel-project
-sudo rm -f /usr/local/bin/lemp-info
-sudo rm -f /usr/local/bin/fix-laravel-permissions
-sudo rm -f /etc/profile.d/laravel-aliases.sh
+sudo rm -f /usr/local/bin/fix-laravel-permissions 2>/dev/null || true
 
 echo " "
 echo "============================================="
@@ -387,87 +348,26 @@ echo "Step 13: Removing PPAs and repositories"
 echo "============================================="
 log "Removing Ondrej PHP PPA..."
 sudo add-apt-repository --remove ppa:ondrej/php -y 2>/dev/null || warning "Failed to remove PHP PPA"
+sudo rm -f /etc/apt/sources.list.d/ondrej-php.list 2>/dev/null || true
+sudo rm -f /etc/apt/sources.list.d/ondrej-ubuntu-php-*.list 2>/dev/null || true
+sudo rm -f /etc/apt/keyrings/ondrej-php.gpg 2>/dev/null || true
 
 log "Removing NodeSource repository..."
-sudo rm -f /etc/apt/sources.list.d/nodesource.list
-sudo rm -f /etc/apt/keyrings/nodesource.gpg
+sudo rm -f /etc/apt/sources.list.d/nodesource.list 2>/dev/null || true
+sudo rm -f /etc/apt/sources.list.d/nodesource.sources 2>/dev/null || true
+sudo rm -f /etc/apt/keyrings/nodesource.gpg 2>/dev/null || true
 
 log "Removing other repositories..."
-sudo rm -f /etc/apt/sources.list.d/*nginx*
-sudo rm -f /etc/apt/sources.list.d/*mariadb*
-sudo rm -f /etc/apt/sources.list.d/*redis*
+sudo rm -f /etc/apt/sources.list.d/mariadb.list /etc/apt/sources.list.d/mariadb-enterprise.list 2>/dev/null || true
+sudo rm -f /etc/apt/sources.list.d/mariadb.sources 2>/dev/null || true
+sudo rm -f /etc/apt/keyrings/mariadb.gpg 2>/dev/null || true
+sudo rm -f /etc/apt/sources.list.d/redis.list 2>/dev/null || true
+sudo rm -f /etc/apt/sources.list.d/redis.sources 2>/dev/null || true
+sudo rm -f /etc/apt/keyrings/redis-archive-keyring.gpg 2>/dev/null || true
 
 echo " "
 echo "============================================="
-echo "Step 14: Cleaning user home directories"
-echo "============================================="
-log "Removing user-level configuration remnants..."
-
-# Get all regular users (UID >= 1000, excluding nobody)
-users=$(awk -F: '$3 >= 1000 && $3 != 65534 {print $1":"$6}' /etc/passwd)
-
-for user_info in $users; do
-    username=$(echo $user_info | cut -d: -f1)
-    homedir=$(echo $user_info | cut -d: -f2)
-
-    if [ -d "$homedir" ]; then
-        log "Cleaning $username's home directory: $homedir"
-
-        # Remove Composer cache and config
-        sudo rm -rf "$homedir/.composer" 2>/dev/null || true
-        sudo rm -rf "$homedir/.config/composer" 2>/dev/null || true
-
-        # Remove NPM cache and config
-        sudo rm -rf "$homedir/.npm" 2>/dev/null || true
-        sudo rm -f "$homedir/.npmrc" 2>/dev/null || true
-
-        # Remove Node.js REPL history
-        sudo rm -f "$homedir/.node_repl_history" 2>/dev/null || true
-
-        # Remove MySQL/MariaDB client history
-        sudo rm -f "$homedir/.mysql_history" 2>/dev/null || true
-
-        # Remove Redis CLI history
-        sudo rm -f "$homedir/.rediscli_history" 2>/dev/null || true
-
-        # Remove user-level PHP configurations
-        sudo rm -rf "$homedir/.config/php" 2>/dev/null || true
-
-        # Remove Laravel-specific directories if they exist
-        sudo rm -rf "$homedir/.laravel" 2>/dev/null || true
-        sudo rm -rf "$homedir/.config/laravel" 2>/dev/null || true
-
-        # Remove any LEMP-related bash aliases from user profiles
-        if [ -f "$homedir/.bashrc" ]; then
-            sudo sed -i '/# Laravel Development Aliases/,/# End Laravel Aliases/d' "$homedir/.bashrc" 2>/dev/null || true
-            sudo sed -i '/alias artisan=/d' "$homedir/.bashrc" 2>/dev/null || true
-            sudo sed -i '/alias tinker=/d' "$homedir/.bashrc" 2>/dev/null || true
-            sudo sed -i '/alias serve=/d' "$homedir/.bashrc" 2>/dev/null || true
-        fi
-
-        if [ -f "$homedir/.profile" ]; then
-            sudo sed -i '/# Laravel Development Aliases/,/# End Laravel Aliases/d' "$homedir/.profile" 2>/dev/null || true
-        fi
-
-        log "✓ Cleaned $username's directory"
-    fi
-done
-
-# Also clean root's home directory
-log "Cleaning root's home directory..."
-sudo rm -rf /root/.composer 2>/dev/null || true
-sudo rm -rf /root/.config/composer 2>/dev/null || true
-sudo rm -rf /root/.npm 2>/dev/null || true
-sudo rm -f /root/.npmrc 2>/dev/null || true
-sudo rm -f /root/.node_repl_history 2>/dev/null || true
-sudo rm -f /root/.mysql_history 2>/dev/null || true
-sudo rm -f /root/.rediscli_history 2>/dev/null || true
-sudo rm -rf /root/.config/php 2>/dev/null || true
-sudo rm -rf /root/.laravel 2>/dev/null || true
-
-echo " "
-echo "============================================="
-echo "Step 15: Removing system-wide caches and temporary files"
+echo "Step 14: System-wide caches and temporary files"
 echo "============================================="
 log "Removing system-wide cache files..."
 
@@ -478,22 +378,18 @@ sudo apt-get autoclean
 # Remove systemd journal logs related to removed services
 sudo journalctl --vacuum-time=1d || warning "Failed to clean journal logs"
 
-# Remove any leftover pid files
+for ver in "${SUPPORTED_PHP_VERSIONS[@]}"; do
+    sudo rm -f "/var/run/php/php${ver}-fpm.pid" 2>/dev/null || true
+    sudo rm -f "/var/run/php/php${ver}-fpm.sock" 2>/dev/null || true
+    sudo rm -f "/run/php/php${ver}-fpm.sock" 2>/dev/null || true
+    sudo rm -f "/run/php/php${ver}-fpm-"*.sock 2>/dev/null || true
+done
 sudo rm -f /var/run/nginx.pid 2>/dev/null || true
-sudo rm -f /var/run/php/php${PHP_VERSION}-fpm.pid 2>/dev/null || true
 sudo rm -f /var/run/mysqld/mysqld.pid 2>/dev/null || true
 sudo rm -f /var/run/redis/redis-server.pid 2>/dev/null || true
-sudo rm -f /var/run/apache2/apache2.pid 2>/dev/null || true
-
-# Remove any leftover socket files
-sudo rm -f /var/run/php/php${PHP_VERSION}-fpm.sock 2>/dev/null || true
 sudo rm -f /var/run/mysqld/mysqld.sock 2>/dev/null || true
 sudo rm -f /var/run/redis/redis-server.sock 2>/dev/null || true
-
-# Remove any leftover lock files
 sudo rm -f /var/lock/nginx.lock 2>/dev/null || true
-sudo rm -f /var/lock/apache2 2>/dev/null || true
-sudo rm -f /var/lock/subsys/* 2>/dev/null || true
 
 # Remove temporary installation files
 sudo rm -rf /tmp/composer-setup.php 2>/dev/null || true
@@ -501,71 +397,33 @@ sudo rm -rf /tmp/node-* 2>/dev/null || true
 sudo rm -rf /tmp/npm-* 2>/dev/null || true
 sudo rm -rf /tmp/php* 2>/dev/null || true
 
-# Remove snap directories if snapd was removed
-sudo rm -rf /snap 2>/dev/null || true
-sudo rm -rf /var/snap 2>/dev/null || true
-sudo rm -rf /var/lib/snapd 2>/dev/null || true
+# Snap directories are preserved (snapd no longer removed wholesale) — no rm -rf /snap
 
 log "✓ System caches and temporary files cleaned"
 
+if [ -t 0 ]; then
+    echo ""
+    read -p "Reset UFW firewall rules? This will disable UFW and remove custom rules (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        log "Resetting UFW firewall..."
+        sudo ufw --force reset 2>/dev/null || warning "Failed to reset UFW"
+        sudo ufw --force disable 2>/dev/null || warning "Failed to disable UFW"
+        sudo sed -i 's/IPV6=yes/IPV6=no/' /etc/default/ufw 2>/dev/null || true
+        log "✓ UFW firewall reset and disabled"
+    else
+        log "UFW firewall left untouched"
+    fi
+else
+    log "Non-interactive mode — UFW firewall left untouched (run: sudo ufw --force reset && sudo ufw --force disable to reset manually)"
+fi
+
 echo " "
 echo "============================================="
-echo "Step 16: Final system verification and cleanup"
+echo "Step 15: Final system verification and cleanup"
 echo "============================================="
-log "Removing any leftover packages..."
-wait_for_apt_lock
-sudo apt-get autoremove --purge -y
-wait_for_apt_lock
-sudo apt-get autoclean
-wait_for_apt_lock
-sudo apt-get clean
-
-log "Fixing any broken packages..."
-sudo dpkg --configure -a || warning "Some packages may still have issues"
-wait_for_apt_lock
-sudo apt-get -f install -y || warning "Failed to fix some dependencies"
-
-log "Updating package database..."
-wait_for_apt_lock
-sudo apt-get update || warning "Failed to update package database"
 
 log "Verifying complete removal..."
-# Final cleanup of any remaining LEMP packages
-log "Performing final cleanup of any remaining packages..."
-
-# Remove any remaining apache packages
-remaining_apache=$(dpkg -l 2>/dev/null | awk '$1 == "ii" && $2 ~ /apache/ {print $2}' | tr '\n' ' ' 2>/dev/null || true)
-if [[ -n "$remaining_apache" && "$remaining_apache" != " " ]]; then
-    log "Removing remaining Apache packages: $remaining_apache"
-    wait_for_apt_lock
-    sudo apt-get remove --purge -y $remaining_apache 2>/dev/null || warning "Failed to remove remaining Apache packages"
-fi
-
-# Remove any remaining php packages
-remaining_php=$(dpkg -l 2>/dev/null | awk '$1 == "ii" && $2 ~ /^php/ {print $2}' | tr '\n' ' ' 2>/dev/null || true)
-if [[ -n "$remaining_php" && "$remaining_php" != " " ]]; then
-    log "Removing remaining PHP packages: $remaining_php"
-    wait_for_apt_lock
-    sudo apt-get remove --purge -y $remaining_php 2>/dev/null || warning "Failed to remove remaining PHP packages"
-fi
-
-# Remove any remaining nginx packages
-remaining_nginx=$(dpkg -l 2>/dev/null | awk '$1 == "ii" && $2 ~ /nginx/ {print $2}' | tr '\n' ' ' 2>/dev/null || true)
-if [[ -n "$remaining_nginx" && "$remaining_nginx" != " " ]]; then
-    log "Removing remaining Nginx packages: $remaining_nginx"
-    wait_for_apt_lock
-    sudo apt-get remove --purge -y $remaining_nginx 2>/dev/null || warning "Failed to remove remaining Nginx packages"
-fi
-
-# Remove any remaining database packages
-remaining_db=$(dpkg -l 2>/dev/null | awk '$1 == "ii" && ($2 ~ /mariadb/ || $2 ~ /mysql/) {print $2}' | tr '\n' ' ' 2>/dev/null || true)
-if [[ -n "$remaining_db" && "$remaining_db" != " " ]]; then
-    log "Removing remaining database packages: $remaining_db"
-    wait_for_apt_lock
-    sudo apt-get remove --purge -y $remaining_db 2>/dev/null || warning "Failed to remove remaining database packages"
-fi
-
-# Final autoremove and autoclean
 wait_for_apt_lock
 sudo apt-get autoremove --purge -y
 wait_for_apt_lock
@@ -602,32 +460,31 @@ else
     log "✓ All LEMP packages successfully removed"
 fi
 
-# Check for remaining services (including newer PHP versions)
 active_services=""
-for service in nginx php${PHP_VERSION}-fpm php8.4-fpm php-fpm mariadb mysql redis-server supervisor apache2 httpd apache2-bin apache2-utils; do
-    if systemctl is-active --quiet $service 2>/dev/null; then
-        active_services="$active_services $service"
+for svc in nginx mariadb mysql redis-server supervisor apache2; do
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+        active_services="$active_services $svc"
     fi
 done
+for ver in "${SUPPORTED_PHP_VERSIONS[@]}"; do
+    if systemctl is-active --quiet "php${ver}-fpm" 2>/dev/null; then
+        active_services="$active_services php${ver}-fpm"
+    fi
+done
+if systemctl is-active --quiet php-fpm 2>/dev/null; then
+    active_services="$active_services php-fpm"
+fi
+if systemctl is-active --quiet certbot.timer 2>/dev/null; then
+    active_services="$active_services certbot.timer"
+fi
+if systemctl is-active --quiet snap.certbot.renew.timer 2>/dev/null; then
+    active_services="$active_services snap.certbot.renew.timer"
+fi
 if [ -n "$active_services" ]; then
-    warning "Some services are still active: $active_services"
+    warning "Some services are still active:$active_services"
     warning "You may need to stop them manually"
 else
     log "✓ All LEMP services successfully stopped"
-fi
-
-# Check for orphaned systemd unit files
-orphaned_units=""
-for unit in nginx php${PHP_VERSION}-fpm php8.4-fpm php-fpm mariadb mysql redis-server supervisor apache2 httpd apache2-bin apache2-utils; do
-    if [ -f "/usr/lib/systemd/system/${unit}.service" ] || [ -f "/lib/systemd/system/${unit}.service" ]; then
-        orphaned_units="$orphaned_units $unit"
-    fi
-done
-if [ -n "$orphaned_units" ]; then
-    warning "Orphaned systemd unit files detected: $orphaned_units"
-    warning "Run: sudo rm -f /usr/lib/systemd/system/{${orphaned_units// /,}}.service /lib/systemd/system/{${orphaned_units// /,}}.service && sudo systemctl daemon-reload"
-else
-    log "✓ No orphaned systemd unit files detected"
 fi
 
 # Final PHP check
@@ -649,7 +506,7 @@ warning "You may want to reboot the system to ensure all changes take effect: su
 echo
 echo -e "${GREEN}Complete Removal Summary:${NC}"
 echo "✓ Nginx web server removed"
-echo "✓ PHP ${PHP_VERSION} and ALL extensions removed"
+echo "✓ PHP and ALL extensions removed"
 echo "✓ MariaDB/MySQL database removed"
 echo "✓ Node.js and NPM removed"
 echo "✓ Redis server removed"
@@ -661,7 +518,6 @@ echo "✓ Configuration files removed"
 echo "✓ Helper scripts removed"
 echo "✓ Laravel scheduler cronjobs removed"
 echo "✓ Repository sources cleaned"
-echo "✓ User home directory caches cleaned"
 echo "✓ System-wide caches cleaned"
 echo "✓ Temporary files removed"
 echo "✓ Service files and sockets removed"

@@ -23,7 +23,7 @@ The broader goals include:
 ### Installation Script (`install.sh`)
 - **Interactive Configuration Wizard** - Guided setup with validation
 - **Non-Interactive Mode** - Perfect for automation and CI/CD
-- **Multiple PHP Versions** - Support for PHP 8.3 LTS and PHP 8.4
+- **Multiple PHP Versions** - Support for PHP 8.3 LTS, 8.4 and 8.5 (latest stable)
 - **Queue Management** - Redis or database queue drivers with Supervisor
 - **Security Optimized** - Firewall, secure passwords, and hardened configurations
 - **SSL Ready** - Certbot integration for Let's Encrypt certificates
@@ -47,15 +47,15 @@ The broader goals include:
 
 ## ⚡ Quick Installation
 ### Fix Any Existing Issues First (If Needed)
-If you encounter dpkg lock errors or package management issues, use the removal script to clean up:
+If you encounter dpkg lock errors, try fixing package state first:
 
 ```bash
-# Run the removal script to clean up any package issues
-sudo bash remove.sh
-
-# Then run the installation
-sudo bash install.sh
+sudo dpkg --configure -a
+sudo apt-get -f install -y
+sudo apt update
 ```
+
+> **Warning:** `remove.sh` is destructive — it **permanently deletes all databases, `/var/www` contents, SSL certificates and configs**. Only use it on disposable/test servers, not to fix a transient dpkg lock.
 
 ### Method 1: Direct Download and Execute
 
@@ -97,7 +97,12 @@ sudo ./install.sh --non-interactive --php-version 8.4 --queue-driver redis
 | Option | Description | Values | Default |
 |--------|-------------|--------|---------|
 | `--non-interactive`, `-n` | Run without prompts using defaults | - | Interactive mode |
-| `--php-version` | Choose PHP version | `8.3`, `8.4` | `8.3` |
+| `--php-version` | Choose PHP version | `8.3`, `8.4`, `8.5` | `8.3` |
+| `--node-version` | Choose Node.js version | `22.x`, `24.x` | `22.x` |
+| `--redis-version` | Choose Redis version | `system`, `7.4`, `8.0` | `7.4` |
+| `--mariadb-version` | Choose MariaDB version | `system`, `11.4` | `11.4` |
+| `--skip-database` | Skip MariaDB (use external DB) | — | Install MariaDB |
+| `--skip-redis` | Skip Redis (use external cache) | — | Install Redis |
 | `--queue-driver` | Select queue backend | `database`, `redis` | `database` |
 | `--help`, `-h` | Show help information | - | - |
 
@@ -107,33 +112,32 @@ You will be prompted to enter some information. Press Enter to accept the defaul
 ## 📦 What Gets Installed
 ### Core Components
 - **Nginx** - High-performance web server with optimized configuration
-- **MariaDB** - Database server with secure installation
-- **PHP** - Version 8.3 or 8.4 with essential Laravel extensions
-- **Redis** - In-memory data store for caching and queues
-- **Node.js** - Latest LTS version for frontend asset compilation
+- **MariaDB** - 11.4 LTS via MariaDB repo (or system default) with secure installation
+- **PHP** - Version 8.3, 8.4 or 8.5 with essential Laravel extensions
+- **Redis** - 7.4/8.0 via Redis.io repo (or system default) for caching and queues
+- **Node.js** - 22.x/24.x LTS via NodeSource signed-by keyring
 - **Composer** - PHP dependency manager
 - **Supervisor** - Process manager for Laravel queue workers
 - **Certbot** - SSL certificate management
 
 ### PHP Extensions
 Essential extensions for Laravel development:
-- `php-fpm`, `php-mysql`, `php-redis`, `php-xml`, `php-zip`
-- `php-curl`, `php-mbstring`, `php-gd`, `php-imagick`
+- `php-fpm`, `php-mysql`, `php-redis` (installed only if Redis enabled), `php-xml`, `php-zip`
+- `php-curl`, `php-mbstring`, `php-gd`, `php-imagick` (optional)
 - `php-bcmath`, `php-soap`, `php-intl`, `php-readline`
-- `php-common`, `php-json`, `php-opcache`, `php-cli`
+- `php-common`, `php-opcache`, `php-cli` (`php-json` is built-in since PHP 8.0)
 
 ### Security & Performance Features
-- **UFW Firewall** - Configured with appropriate rules
-- **OPcache** - PHP bytecode caching for performance
-- **Security Headers** - Nginx security configuration
-- **Process Isolation** - Dedicated PHP-FPM pools per project
-- **Automatic Updates** - Unattended security updates
-- **Log Management** - Centralized logging configuration
+- **UFW Firewall** - Configured with appropriate rules (backup before reset, custom SSH port detection)
+- **OPcache + JIT** - PHP bytecode caching with tracing JIT (production: `validate_timestamps=0`)
+- **Security Headers** - Hardened Nginx (HSTS, Permissions-Policy, CSP, rate limiting)
+- **Process Isolation** - Dedicated PHP-FPM pools per project (RAM-aware, slowlog, logrotate)
+- **Redis ACL** - Authentication via `/etc/redis/users.acl` (7.4/8.0)
 
 ### Helper Scripts
-- `fix-laravel-permissions` - Laravel permission management utility
-- Laravel scheduler cron job setup
-- Project deployment templates
+- `fix-laravel-permissions` - Laravel permission management utility (hardened: `/var/www` prefix guard)
+- Laravel scheduler cron job setup (`www-data` crontab, every minute)
+- Project deployment templates (`/var/www/<project>/DEPLOY_LARAVEL_HERE.md`)
 
 ## ⚠️ Important Notes
 ### Before Installation
@@ -222,15 +226,16 @@ sudo ./remove.sh
 ```
 
 ### What Gets Removed
-The removal script completely removes:
-- All LEMP stack components (Nginx, PHP, MariaDB, Redis)
-- All configuration files and directories
-- All databases and data (**PERMANENTLY DELETED**)
-- All project files in `/var/www/`
-- All SSL certificates
-- All cron jobs and scheduled tasks
-- All helper scripts and utilities
-- All package repositories and caches
+The removal script removes every artifact installed by `install.sh` / `lib/services.sh`:
+- Packages: Nginx, PHP 8.3/8.4/8.5 + extensions, MariaDB, Redis, Node.js, Supervisor, Certbot (apt + snap fallback)
+- Configs: Nginx site + `rate-limit.conf`, PHP-FPM pools + OPcache + logrotate, MariaDB tuning (`60-laravel.cnf`), Redis ACL, Supervisor queue workers
+- Data: databases and data in `/var/lib/mysql`, `/var/lib/redis` (**PERMANENTLY DELETED**), project files in `/var/www/laravel*` + `/var/www/html`
+- SSL: certificates in `/etc/letsencrypt` + `/var/log/letsencrypt` + `/var/lib/letsencrypt`
+- Cron: Laravel scheduler entry in `www-data` crontab
+- Helper: `fix-laravel-permissions` in `/usr/local/bin`
+- Repos/keyrings: Ondrej PHP, MariaDB, NodeSource, Redis.io (including `.sources` DEB822 variants)
+- Secrets: `/root/laravel_lemp_config.txt` (shredded), installer locks and temp files
+- UFW firewall is left untouched by default; remover prompts `Reset UFW? (y/N)` interactively before resetting
 
 ### ⚠️ Removal Warnings
 - **ALL DATA WILL BE PERMANENTLY DELETED**
