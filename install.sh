@@ -1,9 +1,10 @@
 #!/bin/bash
 
-# Check if script is being run correctly
-if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+# Allow piped install via `wget -qO- ... | sudo bash` — only block sourcing from interactive shell
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]] && [[ -t 0 ]]; then
     echo "Error: This script should be executed directly, not sourced."
     echo "Usage: ./installation-script.sh [--non-interactive]"
+    echo "Hint: for piped install use: curl -fsSL https://raw.githubusercontent.com/msulaimanmisri/s-lemp/main/install.sh | sudo bash -s -- --help"
     exit 1
 fi
 
