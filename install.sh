@@ -24,6 +24,7 @@ while [[ $# -gt 0 ]]; do
             SSL_EMAIL="admin@laravel.local"
             PHP_VERSION="8.3"
             MARIADB_VERSION=${MARIADB_VERSION:-11.4}
+            REDIS_VERSION=${REDIS_VERSION:-7.4}
             QUEUE_DRIVER="database"
             INSTALL_SSL=false
             INSTALL_DATABASE=true
@@ -61,6 +62,16 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
 
+        --redis-version)
+            if [[ "$2" == "system" ]] || [[ "$2" == "7.4" ]] || [[ "$2" == "8.0" ]]; then
+                REDIS_VERSION="$2"
+                shift 2
+            else
+                echo "Error: Invalid Redis version. Use 'system' (Ubuntu default), '7.4' or '8.0'"
+                exit 1
+            fi
+            ;;
+
         --mariadb-version)
             if [[ "$2" == "system" ]] || [[ "$2" == "11.4" ]]; then
                 MARIADB_VERSION="$2"
@@ -80,6 +91,7 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --non-interactive, -n       Run in non-interactive mode with defaults"
             echo "  --php-version VERSION       Set PHP version (8.3, 8.4 or 8.5)"
+            echo "  --redis-version VERSION     Set Redis version (system, 7.4 or 8.0)"
             echo "  --mariadb-version VERSION   Set MariaDB version (system or 11.4)"
             echo "  --queue-driver DRIVER       Set queue driver (redis or database)"
             echo "  --skip-database             Skip MariaDB installation (use external database)"
@@ -214,6 +226,7 @@ SYSTEM_USER="www-data"
 PROJECT_GROUP="www-data"
 PHP_VERSION="8.3"
 MARIADB_VERSION="11.4"
+REDIS_VERSION="7.4"
 
 NODE_JS_VERSION="24.x"
 SUPERVISOR_PROCESS_NUM=3
@@ -433,6 +446,7 @@ run_configuration_wizard() {
         REDIS_PASSWORD=${REDIS_PASSWORD:-$(openssl rand -base64 12 2>/dev/null || echo "redispass123")}
         PHP_VERSION=${PHP_VERSION:-8.3}
         MARIADB_VERSION=${MARIADB_VERSION:-11.4}
+        REDIS_VERSION=${REDIS_VERSION:-7.4}
         QUEUE_DRIVER=${QUEUE_DRIVER:-database}
         SUPERVISOR_PROCESS_NUM=${SUPERVISOR_PROCESS_NUM:-3}
         INSTALL_SSL=false
@@ -685,7 +699,28 @@ run_configuration_wizard() {
     done
     echo ""
     
-    # Only show Redis configuration if installing locally
+    # Redis version selection (only if installing locally)
+    if [[ "$INSTALL_REDIS" == "true" ]]; then
+        echo ""
+        info "Redis Version Selection:"
+        echo "  1) System default (Ubuntu archive: 6.0/7.0)"
+        echo "  2) Redis 7.4 (via Redis.io repo, recommended)"
+        echo "  3) Redis 8.0 (via Redis.io repo, latest)"
+        echo ""
+        while true; do
+            read -p "Choose Redis version [2]: " redis_version_option
+            redis_version_option=${redis_version_option:-2}
+            case $redis_version_option in
+                1) REDIS_VERSION="system"; log "✓ Selected Redis: system default"; break ;;
+                2) REDIS_VERSION="7.4"; log "✓ Selected Redis 7.4"; break ;;
+                3) REDIS_VERSION="8.0"; log "✓ Selected Redis 8.0"; break ;;
+                *) error "Please choose option 1, 2 or 3" ;;
+            esac
+        done
+        echo ""
+    fi
+
+    # Only show Redis password prompt if installing locally
     if [[ "$INSTALL_REDIS" == "true" ]]; then
     # Redis Password
     while true; do
@@ -848,7 +883,11 @@ show_configuration_summary() {
     echo ""
     if [[ "$INSTALL_REDIS" == "true" ]]; then
         echo -e "${YELLOW}🔴 Redis Configuration:${NC}"
-        echo -e "   ${WHITE}├─${NC} Install Redis: ${GREEN}Yes (Local installation)${NC}"
+        if [[ "$REDIS_VERSION" == "system" ]]; then
+            echo -e "   ${WHITE}├─${NC} Install Redis: ${GREEN}Yes — system default (Ubuntu archive)${NC}"
+        else
+            echo -e "   ${WHITE}├─${NC} Install Redis: ${GREEN}Yes — ${REDIS_VERSION} (Redis.io repo)${NC}"
+        fi
         echo -e "   ${WHITE}└─${NC} Redis Password: ${GREEN}[HIDDEN]${NC}"
     else
         echo -e "${YELLOW}🔴 Redis Configuration:${NC}"
@@ -859,6 +898,7 @@ show_configuration_summary() {
     echo -e "   ${WHITE}├─${NC} Queue Workers: ${GREEN}$SUPERVISOR_PROCESS_NUM${NC}"
     echo -e "   ${WHITE}├─${NC} Queue Driver: ${GREEN}$QUEUE_DRIVER${NC}"
     echo -e "   ${WHITE}├─${NC} PHP Version: ${GREEN}$PHP_VERSION${NC}"
+    echo -e "   ${WHITE}├─${NC} Redis Version: ${GREEN}$REDIS_VERSION${NC}"
     echo -e "   ${WHITE}├─${NC} MariaDB Version: ${GREEN}$MARIADB_VERSION${NC}"
     echo -e "   ${WHITE}└─${NC} Node.js Version: ${GREEN}$NODE_JS_VERSION${NC}"
     echo ""
@@ -919,6 +959,7 @@ DB_PASSWORD=$DB_PASSWORD
 DB_ROOT_PASSWORD=$DB_ROOT_PASSWORD
 
 INSTALL_REDIS=$INSTALL_REDIS
+REDIS_VERSION=$REDIS_VERSION
 REDIS_PASSWORD=$REDIS_PASSWORD
 SUPERVISOR_PROCESS_NUM=$SUPERVISOR_PROCESS_NUM
 QUEUE_DRIVER=$QUEUE_DRIVER
@@ -968,6 +1009,7 @@ DB_PASSWORD=$DB_PASSWORD
 DB_ROOT_PASSWORD=$DB_ROOT_PASSWORD
 
 INSTALL_REDIS=$INSTALL_REDIS
+REDIS_VERSION=$REDIS_VERSION
 REDIS_PASSWORD=$REDIS_PASSWORD
 SUPERVISOR_PROCESS_NUM=$SUPERVISOR_PROCESS_NUM
 QUEUE_DRIVER=$QUEUE_DRIVER
@@ -1746,8 +1788,11 @@ install_php() {
         "php${PHP_VERSION}-intl"
         "php${PHP_VERSION}-readline"
         "php${PHP_VERSION}-opcache"
-        "php${PHP_VERSION}-redis"
     )
+
+    if [[ "$INSTALL_REDIS" == "true" ]]; then
+        php_packages+=("php${PHP_VERSION}-redis")
+    fi
     
     # Define optional PHP packages (install if available)
     local optional_packages=(
@@ -2328,13 +2373,65 @@ install_composer() {
 }
 
 
+# =========================================================================
+# Setup Redis repository (Redis.io) — with fallback to Ubuntu archive
+# =========================================================================
+setup_redis_repo() {
+    if [[ "$REDIS_VERSION" == "system" ]]; then
+        info "Using system default Redis from Ubuntu archive (REDIS_VERSION=system)"
+        return 0
+    fi
+
+    if dpkg -l 2>/dev/null | grep -q "^ii.*redis-server"; then
+        warning "Redis already installed — skipping repository setup to avoid conflicts"
+        return 0
+    fi
+
+    local redis_list="/etc/apt/sources.list.d/redis.list"
+    if [[ -f "$redis_list" ]] || ls /etc/apt/sources.list.d/*redis* >/dev/null 2>&1; then
+        if grep -q "packages.redis.io" "$redis_list" 2>/dev/null || grep -q "packages.redis.io" /etc/apt/sources.list.d/*redis* 2>/dev/null; then
+            log "✓ Redis.io repository already configured"
+            return 0
+        fi
+    fi
+
+    info "Setting up Redis ${REDIS_VERSION} repository (packages.redis.io)..."
+
+    local ubuntu_codename
+    ubuntu_codename=$(lsb_release -cs 2>/dev/null || grep '^VERSION_CODENAME=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "jammy")
+
+    sudo install -m 0755 -d /etc/apt/keyrings 2>/dev/null || sudo mkdir -p /etc/apt/keyrings
+
+    if curl -fsSL https://packages.redis.io/gpg 2>/dev/null | sudo gpg --dearmor -o /etc/apt/keyrings/redis-archive-keyring.gpg 2>/dev/null; then
+        log "✓ Redis GPG key installed"
+    else
+        warning "Failed to install Redis GPG key — falling back to Ubuntu archive"
+        REDIS_VERSION="system"
+        return 0
+    fi
+
+    echo "deb [signed-by=/etc/apt/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb ${ubuntu_codename} main" | sudo tee "$redis_list" >/dev/null
+
+    wait_for_apt_lock
+    if sudo apt update 2>&1 | tail -5; then
+        log "✓ Redis ${REDIS_VERSION} repository configured"
+    else
+        warning "apt update after Redis repo setup failed — falling back to Ubuntu archive"
+        sudo rm -f "$redis_list" 2>/dev/null || true
+        sudo rm -f /etc/apt/keyrings/redis-archive-keyring.gpg 2>/dev/null || true
+        REDIS_VERSION="system"
+    fi
+}
+
 # Install Redis
 install_redis() {
     echo "   "
     echo "============================================="
     echo -e "${GREEN}Installing Redis server...${NC}"
     echo "============================================="
-    
+
+    setup_redis_repo
+    wait_for_apt_lock
     sudo apt install -y redis-server
     
     # Configure Redis for production use
@@ -2352,24 +2449,36 @@ install_redis() {
         log "✓ Created backup of original Redis configuration"
     fi
     
-    # Set password - handle special characters properly
     info "Configuring Redis authentication..."
-    
-    # Remove any existing requirepass lines to avoid duplicates
-    sudo sed -i '/^requirepass\|^# requirepass/d' "$redis_conf"
-    
-    # Add the new requirepass line at the end of the authentication section
-    # Find the line number where authentication directives are typically located
-    local auth_line=$(sudo grep -n "# requirepass foobared" "${redis_conf}.backup" | head -1 | cut -d: -f1 || echo "999")
-    if [[ "$auth_line" == "999" ]]; then
-        # If we can't find the usual location, append to the end
-        echo "requirepass $REDIS_PASSWORD" | sudo tee -a "$redis_conf" > /dev/null
-    else
-        # Insert at the appropriate location
-        sudo sed -i "${auth_line}i requirepass $REDIS_PASSWORD" "$redis_conf"
+
+    local redis_use_acl=false
+    if [[ "$REDIS_VERSION" == "7.4" ]] || [[ "$REDIS_VERSION" == "8.0" ]]; then
+        redis_use_acl=true
     fi
-    
-    log "✓ Redis authentication configured"
+
+    if [[ "$redis_use_acl" == "true" ]]; then
+        local acl_file="/etc/redis/users.acl"
+        # Remove legacy requirepass lines — ACL is authoritative
+        sudo sed -i '/^requirepass\|^# requirepass/d' "$redis_conf" 2>/dev/null || true
+        sudo sed -i '/^aclfile\|^# aclfile/d' "$redis_conf" 2>/dev/null || true
+        printf 'user default on >%s ~* &* +@all\n' "$REDIS_PASSWORD" | sudo tee "$acl_file" >/dev/null
+        sudo chmod 600 "$acl_file" 2>/dev/null || true
+        sudo chown redis:redis "$acl_file" 2>/dev/null || sudo chown root:root "$acl_file" 2>/dev/null || true
+
+        # Point redis.conf at ACL file (append if not present)
+        if ! sudo grep -q "^aclfile" "$redis_conf" 2>/dev/null; then
+            echo "aclfile $acl_file" | sudo tee -a "$redis_conf" >/dev/null
+        fi
+
+        log "✓ Redis ACL authentication configured ($acl_file)"
+    else
+        # Legacy path for system Redis 6.x
+        sudo sed -i '/^requirepass\|^# requirepass/d' "$redis_conf" 2>/dev/null || true
+        printf 'requirepass %s\n' "$REDIS_PASSWORD" | sudo tee -a "$redis_conf" >/dev/null
+        sudo chmod 600 "$redis_conf" 2>/dev/null || true
+        sudo chown redis:redis "$redis_conf" 2>/dev/null || true
+        log "✓ Redis authentication configured (requirepass — legacy)"
+    fi
     
     # Security configurations - check if lines exist before modifying
     info "Applying Redis security configurations..."
@@ -2377,18 +2486,25 @@ install_redis() {
     if sudo grep -q "^bind " "$redis_conf"; then
         sudo sed -i 's/^bind .*/bind 127.0.0.1/' "$redis_conf"
     else
-        # Find and replace the default bind configuration
         sudo sed -i 's/^bind 127.0.0.1 ::1$/bind 127.0.0.1/' "$redis_conf"
     fi
     
-    # Memory and policy configurations
+    # Memory and policy configurations — RAM-aware (capped 128M–1G)
     info "Configuring Redis memory settings..."
-    
+
+    local total_ram_gb
+    total_ram_gb=$(free -g 2>/dev/null | awk '/^Mem:/{print $2}' 2>/dev/null || echo 2)
+    [[ "$total_ram_gb" -lt 1 ]] && total_ram_gb=1
+    local redis_maxmemory_mb=$(( total_ram_gb * 1024 * 15 / 100 ))
+    [[ "$redis_maxmemory_mb" -lt 128 ]] && redis_maxmemory_mb=128
+    [[ "$redis_maxmemory_mb" -gt 1024 ]] && redis_maxmemory_mb=1024
+
     if sudo grep -q "^maxmemory " "$redis_conf"; then
-        sudo sed -i 's/^maxmemory .*/maxmemory 256mb/' "$redis_conf"
+        sudo sed -i "s/^maxmemory .*/maxmemory ${redis_maxmemory_mb}mb/" "$redis_conf"
     else
-        sudo sed -i 's/^# maxmemory <bytes>/maxmemory 256mb/' "$redis_conf"
+        sudo sed -i "s/^# maxmemory <bytes>/maxmemory ${redis_maxmemory_mb}mb/" "$redis_conf"
     fi
+    log "✓ Redis maxmemory set to ${redis_maxmemory_mb}mb (~15% of ${total_ram_gb}G RAM)"
     
     if sudo grep -q "^maxmemory-policy " "$redis_conf"; then
         sudo sed -i 's/^maxmemory-policy .*/maxmemory-policy allkeys-lru/' "$redis_conf"
@@ -2454,10 +2570,10 @@ install_redis() {
     
     log "✓ Redis installed and configured"
     
-    # Test Redis connection with retries
+    # Test Redis connection with retries (REDISCLI_AUTH avoids -a deprecation/leak)
     local test_retries=5
     for ((i=1; i<=test_retries; i++)); do
-        if timeout 10 redis-cli -a "${REDIS_PASSWORD}" ping 2>/dev/null | grep -q "PONG"; then
+        if timeout 10 env REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli ping 2>/dev/null | grep -q "PONG"; then
             log "✓ Redis connection test successful"
             return 0
         else
@@ -2467,14 +2583,15 @@ install_redis() {
             fi
         fi
     done
-    
+
     warning "Redis connection test failed after $test_retries attempts"
     info "Redis might need manual configuration - check /etc/redis/redis.conf"
-    
+
     # Try without password if authentication fails
     if timeout 5 redis-cli ping 2>/dev/null | grep -q "PONG"; then
         warning "Redis is running but authentication might not be configured correctly"
         info "Check Redis configuration: sudo nano /etc/redis/redis.conf"
+        info "ACL file (if using Redis 7.4/8.0): sudo cat /etc/redis/users.acl"
     fi
 }
 
@@ -3146,7 +3263,7 @@ verify_installation() {
     
     # Check Redis connectivity (only if Redis was installed locally)
     if [[ "$INSTALL_REDIS" == "true" ]]; then
-        if timeout 5 redis-cli -a "${REDIS_PASSWORD}" ping 2>/dev/null | grep -q "PONG"; then
+        if timeout 5 env REDISCLI_AUTH="${REDIS_PASSWORD}" redis-cli ping 2>/dev/null | grep -q "PONG"; then
             log "✓ Redis server connectivity works"
             
             # Also test PHP Redis extension connectivity
