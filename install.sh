@@ -1941,12 +1941,26 @@ listen.owner = www-data
 listen.group = www-data
 listen.mode = 0660
 
+; --- RAM-aware tuning: set pm values based on detected RAM ---
+; (computed before writing this file; values injected below)
 pm = dynamic
 pm.max_children = 20
 pm.start_servers = 3
 pm.min_spare_servers = 2
 pm.max_spare_servers = 6
 pm.max_requests = 1000
+
+; Resilience / observability
+pm.status_path = /fpm-status
+ping.path = /fpm-ping
+ping.response = pong
+request_terminate_timeout = 300
+request_slowlog_timeout = 10s
+slowlog = /var/log/php/${PROJECT_NAME}-slow.log
+catch_workers_output = yes
+clear_env = no
+listen.backlog = 511
+decorate_workers_output = no
 
 php_admin_value[memory_limit] = 256M
 php_admin_value[upload_max_filesize] = 64M
@@ -1971,6 +1985,46 @@ php_admin_value[session.use_strict_mode] = 1
 php_admin_value[realpath_cache_size] = 4096K
 php_admin_value[realpath_cache_ttl] = 7200
 EOF
+
+    # --- Post-process: RAM-aware pm tuning (in-place, keep heredoc readable) ---
+    {
+        local _ram_gb
+        _ram_gb=$(free -g 2>/dev/null | awk '/^Mem:/{print $2}' 2>/dev/null || echo 2)
+        [[ "$_ram_gb" -lt 1 ]] && _ram_gb=1
+        local _max_children=$(( _ram_gb * 8 ))
+        [[ "$_max_children" -lt 5 ]] && _max_children=5
+        [[ "$_max_children" -gt 30 ]] && _max_children=30
+        local _start_servers=$(( _max_children / 4 ))
+        [[ "$_start_servers" -lt 2 ]] && _start_servers=2
+        [[ "$_start_servers" -gt 5 ]] && _start_servers=5
+        local _min_spare=$(( _max_children / 10 ))
+        [[ "$_min_spare" -lt 1 ]] && _min_spare=1
+        local _max_spare=$(( _max_children / 3 ))
+        [[ "$_max_spare" -lt 3 ]] && _max_spare=3
+
+        sudo sed -i "s/^pm.max_children = .*/pm.max_children = ${_max_children}/" "/etc/php/${PHP_VERSION}/fpm/pool.d/${PROJECT_NAME}.conf" 2>/dev/null || true
+        sudo sed -i "s/^pm.start_servers = .*/pm.start_servers = ${_start_servers}/" "/etc/php/${PHP_VERSION}/fpm/pool.d/${PROJECT_NAME}.conf" 2>/dev/null || true
+        sudo sed -i "s/^pm.min_spare_servers = .*/pm.min_spare_servers = ${_min_spare}/" "/etc/php/${PHP_VERSION}/fpm/pool.d/${PROJECT_NAME}.conf" 2>/dev/null || true
+        sudo sed -i "s/^pm.max_spare_servers = .*/pm.max_spare_servers = ${_max_spare}/" "/etc/php/${PHP_VERSION}/fpm/pool.d/${PROJECT_NAME}.conf" 2>/dev/null || true
+        log "✓ PHP-FPM pool tuned for ~${_ram_gb}G RAM (max_children=${_max_children}, start=${_start_servers})"
+    }
+
+    # Logrotate for PHP-FPM project logs
+    sudo tee "/etc/logrotate.d/php-fpm-${PROJECT_NAME}" >/dev/null <<LREOF
+/var/log/php/${PROJECT_NAME}-*.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 www-data www-data
+    postrotate
+        systemctl reload php${PHP_VERSION}-fpm >/dev/null 2>&1 || true
+    endscript
+}
+LREOF
+    log "✓ Logrotate installed for PHP-FPM logs (/etc/logrotate.d/php-fpm-${PROJECT_NAME})"
     
     # Verify pool configuration syntax
     if sudo php-fpm${PHP_VERSION} -t -y /etc/php/${PHP_VERSION}/fpm/pool.d/${PROJECT_NAME}.conf 2>/dev/null; then
@@ -2680,6 +2734,27 @@ install_redis() {
     sudo sed -i 's/^# save 300 10/save 300 10/' "$redis_conf"
     sudo sed -i 's/^# save 60 10000/save 60 10000/' "$redis_conf"
     
+    # Ensure Redis runs supervised under systemd and data dir is correct
+    if sudo grep -q "^supervised " "$redis_conf" 2>/dev/null; then
+        sudo sed -i 's/^supervised .*/supervised systemd/' "$redis_conf" 2>/dev/null || true
+    elif sudo grep -q "^# supervised" "$redis_conf" 2>/dev/null; then
+        sudo sed -i 's/^# supervised .*/supervised systemd/' "$redis_conf" 2>/dev/null || true
+    fi
+    if sudo grep -q "^dir " "$redis_conf" 2>/dev/null; then
+        sudo sed -i 's|^dir .*|dir /var/lib/redis|' "$redis_conf" 2>/dev/null || true
+    fi
+    if sudo grep -q "^protected-mode" "$redis_conf" 2>/dev/null; then
+        sudo sed -i 's/^protected-mode .*/protected-mode yes/' "$redis_conf" 2>/dev/null || true
+    fi
+    if sudo grep -q "^activedefrag " "$redis_conf" 2>/dev/null; then
+        sudo sed -i 's/^activedefrag .*/activedefrag yes/' "$redis_conf" 2>/dev/null || true
+    elif sudo grep -q "^# activedefrag" "$redis_conf" 2>/dev/null; then
+        sudo sed -i 's/^# activedefrag .*/activedefrag yes/' "$redis_conf" 2>/dev/null || true
+    else
+        if ! sudo grep -q "^activedefrag" "$redis_conf" 2>/dev/null; then
+            echo "activedefrag yes" | sudo tee -a "$redis_conf" >/dev/null 2>&1 || true
+        fi
+    fi
     log "✓ Redis configuration applied successfully"
     
     # Test Redis configuration before starting
@@ -2784,18 +2859,26 @@ create_laravel_queue_config() {
         queue_command="php ${PROJECT_ROOT}/${PROJECT_NAME}/artisan queue:work ${QUEUE_DRIVER} --tries=3 --timeout=90"
     fi
     
-    # Create the supervisor configuration file
+    # Create the supervisor configuration file — hardened
     sudo tee "$supervisor_config" > /dev/null <<EOF
 [program:${PROJECT_NAME}-queue]
 process_name=%(program_name)s_%(process_num)02d
 command=${queue_command}
+directory=${PROJECT_ROOT}/${PROJECT_NAME}
 autostart=true
 autorestart=true
 user=www-data
 numprocs=${SUPERVISOR_PROCESS_NUM}
+startsecs=5
+startretries=3
+killasgroup=true
+stopasgroup=true
+stopwaitsecs=90
 redirect_stderr=true
 stdout_logfile=${PROJECT_ROOT}/${PROJECT_NAME}/storage/logs/queue-worker.log
-stopwaitsecs=3600
+stdout_logfile_maxbytes=10MB
+stdout_logfile_backups=5
+environment=APP_ENV="production"
 EOF
     
     # Verify the configuration file was created
