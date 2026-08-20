@@ -185,7 +185,16 @@ wait_for_apt_lock() {
 cleanup_on_error() {
     local exit_code=$?
     local line_number=$1
-    error "Installation failed at line $line_number with exit code $exit_code"
+    local bash_lineno=${2:-?}
+    local bash_source=${3:-?}
+    local bash_command=${4:-?}
+    error "Installation failed at line $line_number (source ${bash_source}:${bash_lineno} cmd: ${bash_command}) with exit code $exit_code"
+    if [[ "$bash_source" == *"services.sh"* ]] || [[ "$bash_command" == *"mariadb"* ]] || [[ "$bash_command" == *"mysql"* ]]; then
+        info "Dumping MariaDB diagnostics before cleanup..."
+        systemctl status mariadb --no-pager -l 2>&1 | tail -60 || true
+        journalctl -u mariadb --no-pager -n 80 2>&1 | tail -80 || true
+        cat /var/log/mysql/error.log 2>/dev/null | tail -80 || true
+    fi
     
     # Attempt basic cleanup
     warning "Attempting to clean up partial installation..."
@@ -232,11 +241,14 @@ cleanup_lock() {
 
 cleanup_on_error_with_lock() {
     local line_number=$1
-    cleanup_on_error "$line_number"
+    local bash_lineno=${2:-?}
+    local bash_source=${3:-?}
+    local bash_command=${4:-?}
+    cleanup_on_error "$line_number" "$bash_lineno" "$bash_source" "$bash_command"
     cleanup_lock
 }
 
-trap 'cleanup_on_error_with_lock $LINENO' ERR
+trap 'cleanup_on_error_with_lock $LINENO "${BASH_LINENO[0]:-?}" "${BASH_SOURCE[0]:-?}" "${BASH_COMMAND:-?}"' ERR
 trap cleanup_lock EXIT
 
 # Create lock to prevent concurrent installations — uses flock when available
@@ -446,9 +458,34 @@ generate_password() {
     return 1
 }
 
+prompt_read() {
+    local _pr="$1" _vr="$2" _ans=""
+    if [[ -c /dev/tty ]]; then
+        printf '%s' "$_pr" > /dev/tty 2>/dev/null || printf '%s' "$_pr" >&2
+        IFS= read -r _ans < /dev/tty 2>/dev/null || IFS= read -r _ans
+    else
+        printf '%s' "$_pr" >&2
+        IFS= read -r _ans
+    fi
+    printf -v "$_vr" '%s' "$_ans"
+}
+
+prompt_read_silent() {
+    local _pr="$1" _vr="$2" _ans=""
+    if [[ -c /dev/tty ]]; then
+        printf '%s' "$_pr" > /dev/tty 2>/dev/null || printf '%s' "$_pr" >&2
+        IFS= read -rs _ans < /dev/tty 2>/dev/null || IFS= read -rs _ans
+        echo "" > /dev/tty 2>/dev/null || echo "" >&2
+    else
+        printf '%s' "$_pr" >&2
+        IFS= read -rs _ans; echo "" >&2
+    fi
+    printf -v "$_vr" '%s' "$_ans"
+}
+
 # Function to display S-LEMP banner
 show_slemp_banner() {
-    clear
+    if [[ -t 1 ]]; then clear; fi
     echo ""
     echo -e "${CYAN}"
     echo "███████╗      ██╗     ███████╗███╗   ███╗██████╗ "
@@ -479,6 +516,10 @@ show_config_wizard_header() {
 # Main configuration wizard
 run_configuration_wizard() {
     show_config_wizard_header
+
+    if [[ ! -t 0 || ! -t 1 || ! -t 2 ]] && [[ -c /dev/tty ]] && [[ "$INTERACTIVE_MODE" != "false" ]]; then
+        exec < /dev/tty > /dev/tty 2>&1 2>/dev/null || true
+    fi
 
     if [[ ! -t 0 ]] && [[ "$INTERACTIVE_MODE" != "false" ]]; then
         echo "[ERROR] No interactive terminal detected. Run with a TTY or use --non-interactive." >&2
@@ -514,7 +555,7 @@ run_configuration_wizard() {
     
     # Project Name
     while true; do
-        read -p "Enter project name: " input_project_name
+        prompt_read "Enter project name [laravel-project]: " input_project_name
         PROJECT_NAME=${input_project_name:-"laravel-project"}
         
         if validate_project_name "$PROJECT_NAME"; then
@@ -528,7 +569,7 @@ run_configuration_wizard() {
     
     # Domain Name
     while true; do
-        read -p "Enter domain name [${PROJECT_NAME}.com]: " input_domain
+        prompt_read "Enter domain name [${PROJECT_NAME}.com]: " input_domain
         DOMAIN_NAME=${input_domain:-"${PROJECT_NAME}.com"}
         
         if validate_domain "$DOMAIN_NAME"; then
@@ -542,7 +583,7 @@ run_configuration_wizard() {
     
     # SSL Email
     while true; do
-        read -p "Enter email for SSL certificates [admin@${DOMAIN_NAME}]: " input_email
+        prompt_read "Enter email for SSL certificates [admin@${DOMAIN_NAME}]: " input_email
         SSL_EMAIL=${input_email:-"admin@${DOMAIN_NAME}"}
         
         if validate_email "$SSL_EMAIL"; then
@@ -567,7 +608,7 @@ run_configuration_wizard() {
     echo ""
     
     while true; do
-        read -p "Choose database option [1]: " db_install_option
+        prompt_read "Choose database option [1]: " db_install_option
         db_install_option=${db_install_option:-1}
         
         case $db_install_option in
@@ -597,7 +638,7 @@ run_configuration_wizard() {
         echo "  2) MariaDB 11.4 LTS (via MariaDB Foundation repo, recommended)"
         echo ""
         while true; do
-            read -p "Choose MariaDB version [2]: " mariadb_version_option
+            prompt_read "Choose MariaDB version [2]: " mariadb_version_option
             mariadb_version_option=${mariadb_version_option:-2}
             case $mariadb_version_option in
                 1) MARIADB_VERSION="system"; log "✓ Selected MariaDB: system default"; break ;;
@@ -611,7 +652,7 @@ run_configuration_wizard() {
     # Only show database name/user/password prompts if installing locally
     if [[ "$INSTALL_DATABASE" == "true" ]]; then
     while true; do
-        read -p "Enter database name [${PROJECT_NAME//-/_}_db]: " input_db_name
+        prompt_read "Enter database name [${PROJECT_NAME//-/_}_db]: " input_db_name
         DB_NAME=${input_db_name:-"${PROJECT_NAME//-/_}_db"}
         
         if [[ $DB_NAME =~ ^[a-zA-Z0-9_]+$ ]] && [[ ${#DB_NAME} -le 64 ]]; then
@@ -625,7 +666,7 @@ run_configuration_wizard() {
     
     # Database User
     while true; do
-        read -p "Enter database username [${PROJECT_NAME//-/_}_db_usr]: " input_db_user
+        prompt_read "Enter database username [${PROJECT_NAME//-/_}_db_usr]: " input_db_user
         DB_USER=${input_db_user:-"${PROJECT_NAME//-/_}_db_usr"}
         
         if [[ $DB_USER =~ ^[a-zA-Z0-9_]+$ ]] && [[ ${#DB_USER} -le 32 ]]; then
@@ -645,7 +686,7 @@ run_configuration_wizard() {
     echo ""
     
     while true; do
-        read -p "Choose option [1]: " password_option
+        prompt_read "Choose option [1]: " password_option
         password_option=${password_option:-1}
         
         case $password_option in
@@ -656,15 +697,14 @@ run_configuration_wizard() {
                 ;;
             2)
                 while true; do
-                    read -s -p "Enter database password: " input_db_password
-                    echo ""
+                    prompt_read_silent "Enter database password: " input_db_password
                     
                     if [[ ${#input_db_password} -ge 8 ]]; then
                         strength=$(check_password_strength "$input_db_password")
                         case $strength in
                             STRONG) log "✓ Password strength: STRONG"; DB_PASSWORD="$input_db_password"; break 2;;
                             MEDIUM) warning "Password strength: MEDIUM"; 
-                                   read -p "Continue with this password? (y/N): " confirm
+                                   prompt_read "Continue with this password? (y/N): " confirm
                                    if [[ $confirm =~ ^[Yy]$ ]]; then DB_PASSWORD="$input_db_password"; break 2; fi;;
                             WEAK) error "Password too weak. Please use a stronger password.";;
                         esac
@@ -683,7 +723,7 @@ run_configuration_wizard() {
     # Database Root Password
     echo ""
     while true; do
-        read -p "Generate MariaDB root password automatically? (Y/n): " auto_root_pass
+        prompt_read "Generate MariaDB root password automatically? (Y/n): " auto_root_pass
         auto_root_pass=${auto_root_pass:-Y}
         
         case $auto_root_pass in
@@ -694,8 +734,7 @@ run_configuration_wizard() {
                 ;;
             [Nn]*)
                 while true; do
-                    read -s -p "Enter MariaDB root password: " input_root_password
-                    echo ""
+                    prompt_read_silent "Enter MariaDB root password: " input_root_password
                     
                     if [[ ${#input_root_password} -ge 8 ]]; then
                         DB_ROOT_PASSWORD="$input_root_password"
@@ -728,7 +767,7 @@ run_configuration_wizard() {
     echo ""
     
     while true; do
-        read -p "Choose Redis option [1]: " redis_install_option
+        prompt_read "Choose Redis option [1]: " redis_install_option
         redis_install_option=${redis_install_option:-1}
         
         case $redis_install_option in
@@ -759,7 +798,7 @@ run_configuration_wizard() {
         echo "  3) Redis 8.0 (via Redis.io repo, latest)"
         echo ""
         while true; do
-            read -p "Choose Redis version [2]: " redis_version_option
+            prompt_read "Choose Redis version [2]: " redis_version_option
             redis_version_option=${redis_version_option:-2}
             case $redis_version_option in
                 1) REDIS_VERSION="system"; log "✓ Selected Redis: system default"; break ;;
@@ -775,7 +814,7 @@ run_configuration_wizard() {
     if [[ "$INSTALL_REDIS" == "true" ]]; then
     # Redis Password
     while true; do
-        read -p "Generate Redis password automatically? (Y/n): " auto_redis_pass
+        prompt_read "Generate Redis password automatically? (Y/n): " auto_redis_pass
         auto_redis_pass=${auto_redis_pass:-Y}
         
         case $auto_redis_pass in
@@ -786,8 +825,7 @@ run_configuration_wizard() {
                 ;;
             [Nn]*)
                 while true; do
-                    read -s -p "Enter Redis password: " input_redis_password
-                    echo ""
+                    prompt_read_silent "Enter Redis password: " input_redis_password
                     
                     if [[ ${#input_redis_password} -ge 8 ]]; then
                         REDIS_PASSWORD="$input_redis_password"
@@ -821,7 +859,7 @@ run_configuration_wizard() {
     echo ""
     
     while true; do
-        read -p "Choose PHP version [1]: " php_version_option
+        prompt_read "Choose PHP version [1]: " php_version_option
         php_version_option=${php_version_option:-1}
         
         case $php_version_option in
@@ -857,7 +895,7 @@ run_configuration_wizard() {
         echo ""
         
         while true; do
-            read -p "Choose queue driver [1]: " queue_driver_option
+            prompt_read "Choose queue driver [1]: " queue_driver_option
             queue_driver_option=${queue_driver_option:-1}
             
             case $queue_driver_option in
@@ -891,7 +929,7 @@ run_configuration_wizard() {
     echo "  2) Node.js 24.x LTS (Latest)"
     echo ""
     while true; do
-        read -p "Choose Node.js version [1]: " node_version_option
+        prompt_read "Choose Node.js version [1]: " node_version_option
         node_version_option=${node_version_option:-1}
         case $node_version_option in
             1) NODE_JS_VERSION="22.x"; log "✓ Selected Node.js 22.x LTS"; break ;;
@@ -904,7 +942,7 @@ run_configuration_wizard() {
     # Supervisor Process Number
     echo ""
     while true; do
-        read -p "Number of queue worker processes [3]: " input_processes
+        prompt_read "Number of queue worker processes [3]: " input_processes
         SUPERVISOR_PROCESS_NUM=${input_processes:-3}
         
         if [[ $SUPERVISOR_PROCESS_NUM =~ ^[1-9][0-9]*$ ]] && [[ $SUPERVISOR_PROCESS_NUM -le 20 ]]; then
@@ -980,7 +1018,7 @@ show_configuration_summary() {
     INSTALL_SSL=false
     
     while true; do
-        read -p "Proceed with this configuration? (Y/n): " confirm_config
+        prompt_read "Proceed with this configuration? (Y/n): " confirm_config
         confirm_config=${confirm_config:-Y}
         
         case $confirm_config in
@@ -1137,7 +1175,6 @@ check_ubuntu() {
     
     # Additional disk information
     TOTAL_DISK_GB=$(df -BG / | tail -n1 | awk '{print $2}' | sed 's/G//')
-    info "Total Disk Space: ${TOTAL_DISK_GB} GB"
     
     # Network Information
     echo ""
@@ -1202,7 +1239,7 @@ check_ubuntu() {
     if [[ ! "$UBUNTU_VERSION" =~ ^(22|24)\. ]]; then
         warning "This script is optimized for Ubuntu 22.04 and 24.04"
         warning "Your version ($UBUNTU_VERSION) may not be fully supported"
-        read -p "Continue anyway? (y/N): " -n 1 -r
+        prompt_read "Continue anyway? (y/N): " REPLY; REPLY=${REPLY:0:1}
         echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
             exit 1
@@ -1485,7 +1522,7 @@ main() {
         echo ""
         echo -e "${CYAN}This script will install and configure:${NC}"
         echo "  - Nginx web server (optimized for Laravel)"
-        echo "  - PHP 8.3/8.4 with all Laravel extensions"
+        echo "  - PHP 8.3/8.4/8.5 with all Laravel extensions"
         echo "  - MariaDB database server (optional)"
         echo "  - Redis server (optional)"
         echo "  - Node.js for asset compilation"
