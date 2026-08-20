@@ -1095,64 +1095,95 @@ install_mariadb() {
 
     wait_for_apt_lock
     sudo DEBIAN_FRONTEND=noninteractive apt install -y mariadb-server mariadb-client
-    sudo systemctl daemon-reload 2>/dev/null || true
+    sudo systemctl daemon-reload 2>&1 | tail -20 || true
     wait_for_apt_lock; sleep 1
 
-    if ss -lntp 2>/dev/null | grep -q ':3306 '; then
-        warning "Port 3306 already in use — checking holder:"; ss -lntp 2>/dev/null | grep ':3306' || true
-    fi
-    if command -v aa-status >/dev/null 2>&1 && sudo aa-status 2>/dev/null | grep -q mariadb; then
-        info "AppArmor profile for mysqld active"
-    fi
-    if [[ ! -d /var/lib/mysql/mysql ]]; then
-        warning "/var/lib/mysql/mysql missing — initializing data directory"
-        sudo mysql_install_db --user=mysql 2>&1 | tail -20 || true
+    _mariadb_dump_logs() {
+        sudo systemctl status mariadb --no-pager -l 2>&1 | tail -60 || true
+        sudo journalctl -u mariadb --no-pager -n 80 2>&1 | tail -80 || true
+        sudo cat /var/log/mysql/error.log 2>&1 | tail -80 || true
+        sudo cat /var/log/mysql/mariadb.log 2>&1 | tail -80 || true
+    }
+
+    if systemctl is-active --quiet mariadb 2>/dev/null; then
+        log "✓ MariaDB already active — skipping start"
+    else
+        sudo systemctl reset-failed mariadb 2>/dev/null || true
+        sudo mkdir -p /var/log/mysql /run/mysqld 2>&1 | tail -5 || true
         sudo chown -R mysql:mysql /var/lib/mysql 2>/dev/null || true
-    fi
+        sudo chown mysql:mysql /var/log/mysql /run/mysqld 2>/dev/null || true
+        sudo chmod 755 /run/mysqld 2>/dev/null || true
+        if ss -lntp 2>&1 | grep -q ':3306 '; then
+            warning "Port 3306 already in use — checking holder:"; ss -lntp 2>&1 | grep ':3306' || true
+        fi
+        if command -v aa-status >/dev/null 2>&1 && sudo aa-status 2>&1 | grep -q mariadb; then
+            info "AppArmor profile for mysqld active"
+        fi
+        if [[ ! -d /var/lib/mysql/mysql ]]; then
+            warning "/var/lib/mysql/mysql missing — initializing data directory"
+            if command -v mariadb-install-db >/dev/null 2>&1; then
+                sudo mariadb-install-db --user=mysql 2>&1 | tail -20 || true
+            else
+                sudo mysql_install_db --user=mysql 2>&1 | tail -20 || true
+            fi
+            sudo chown -R mysql:mysql /var/lib/mysql 2>/dev/null || true
+        fi
 
-    echo " "
-    echo "============================================="
-    echo -e "${GREEN}Starting and configuring MariaDB...${NC}"
-    echo "============================================="
+        echo " "
+        echo "============================================="
+        echo -e "${GREEN}Starting and configuring MariaDB...${NC}"
+        echo "============================================="
 
-    if ! systemctl is-system-running >/dev/null 2>&1 && ! systemctl status mariadb >/dev/null 2>&1; then
-        if [[ -n "${WSL_DISTRO_NAME:-}" ]] || systemd-detect-virt --container >/dev/null 2>&1; then
-            warning "systemd not available (WSL/container) — trying service/mysqld fallback"
-            if ! sudo service mariadb start 2>&1 | tail -20; then
-                sudo mysqld --user=mysql --daemonize 2>&1 | tail -20 || {
-                    error "MariaDB failed to start without systemd"
-                    journalctl --no-pager -n 80 2>&1 | tail -80 || true
-                    cat /var/log/mysql/error.log 2>/dev/null | tail -80 || true
+        if [[ -n "${WSL_DISTRO_NAME:-}" ]] || systemd-detect-virt --container >/dev/null 2>&1 || ! systemctl is-system-running >/dev/null 2>&1; then
+            if systemctl status mariadb >/dev/null 2>&1; then
+                if sudo systemctl start mariadb 2>&1; then
+                    log "✓ MariaDB started via systemctl (WSL/container compat)"
+                else
+                    error "systemctl start mariadb failed"
+                    _mariadb_dump_logs
                     return 1
-                }
+                fi
+                sudo systemctl enable mariadb 2>/dev/null || true
+            else
+                warning "systemd not available (WSL/container) — trying service/mysqld fallback"
+                if ! sudo service mariadb start 2>&1 | tail -20; then
+                    sudo mysqld --user=mysql --daemonize 2>&1 | tail -20 || {
+                        error "MariaDB failed to start without systemd"
+                        journalctl --no-pager -n 80 2>&1 | tail -80 || true
+                        cat /var/log/mysql/error.log 2>&1 | tail -80 || true
+                        return 1
+                    }
+                fi
             fi
         else
-            if ! sudo systemctl start mariadb 2>&1 | tail -20; then
+            if sudo systemctl start mariadb 2>&1; then
+                log "✓ MariaDB started"
+            else
                 error "systemctl start mariadb failed"
-                sudo systemctl status mariadb --no-pager -l 2>&1 | tail -60 || true
-                sudo journalctl -u mariadb --no-pager -n 80 2>&1 | tail -80 || true
-                sudo cat /var/log/mysql/error.log 2>/dev/null | tail -80 || true
+                _mariadb_dump_logs
                 return 1
             fi
             sudo systemctl enable mariadb 2>/dev/null || true
+            for _i in {1..15}; do systemctl is-active --quiet mariadb && break; sleep 2; done
+            if ! systemctl is-active --quiet mariadb; then
+                error "MariaDB not active after start"
+                _mariadb_dump_logs
+                return 1
+            fi
+            for _i in {1..15}; do mysqladmin ping --silent 2>/dev/null && break; mysql -e "SELECT 1" >/dev/null 2>&1 && break; sleep 2; done
         fi
-    else
-        if ! sudo systemctl start mariadb 2>&1 | tail -20; then
-            error "systemctl start mariadb failed"
-            sudo systemctl status mariadb --no-pager -l 2>&1 | tail -60 || true
-            sudo journalctl -u mariadb --no-pager -n 80 2>&1 | tail -80 || true
-            sudo cat /var/log/mysql/error.log 2>/dev/null | tail -80 || true
-            return 1
+        for _i in {1..15}; do systemctl is-active --quiet mariadb 2>/dev/null && break; sleep 1; done
+        if ! systemctl is-active --quiet mariadb 2>/dev/null; then
+            for _i in {1..15}; do mysqladmin ping --silent 2>/dev/null && break; sleep 1; done
+            if ! mysqladmin ping --silent 2>/dev/null && ! mysql -e "SELECT 1" >/dev/null 2>&1; then
+                error "MariaDB not active after start"
+                _mariadb_dump_logs
+                return 1
+            fi
         fi
+    fi
+    if systemctl is-active --quiet mariadb 2>/dev/null; then
         sudo systemctl enable mariadb 2>/dev/null || true
-        for _i in {1..15}; do systemctl is-active --quiet mariadb && break; sleep 2; done
-        if ! systemctl is-active --quiet mariadb; then
-            error "MariaDB not active after start"
-            sudo journalctl -u mariadb --no-pager -n 80 2>&1 | tail -80 || true
-            sudo cat /var/log/mysql/error.log 2>/dev/null | tail -80 || true
-            return 1
-        fi
-        for _i in {1..15}; do mysqladmin ping --silent 2>/dev/null && break; mysql -e "SELECT 1" >/dev/null 2>&1 && break; sleep 2; done
     fi
 
     echo "   "
@@ -1244,15 +1275,13 @@ install_mariadb() {
     }
 
     configure_mariadb_tuning
-    if sudo systemctl restart mariadb 2>&1 | tail -20; then
-        log "✓ MariaDB restarted with Laravel tuning"
-        sleep 2
-    else
-        warning "MariaDB tuning written but restart failed — dumping diagnostics"
-        sudo journalctl -u mariadb --no-pager -n 80 2>&1 | tail -80 || true
-        sudo cat /var/log/mysql/error.log 2>/dev/null | tail -80 || true
+    if ! sudo systemctl restart mariadb 2>&1 | tail -20; then
+        warning "MariaDB tuning restart failed — dumping diagnostics"
+        _mariadb_dump_logs
         return 1
     fi
+    log "✓ MariaDB restarted with Laravel tuning"
+    sleep 2
 
     # Test database connection
     if mysql -u "${DB_USER}" -p"${DB_PASSWORD}" -e "USE \`${DB_NAME}\`; SELECT 1;" &>/dev/null; then

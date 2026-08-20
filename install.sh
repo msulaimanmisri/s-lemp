@@ -183,17 +183,18 @@ wait_for_apt_lock() {
 
 # Custom error handler with cleanup
 cleanup_on_error() {
-    local exit_code=$?
-    local line_number=$1
-    local bash_lineno=${2:-?}
-    local bash_source=${3:-?}
-    local bash_command=${4:-?}
+    local exit_code=$1
+    local line_number=$2
+    local bash_lineno=${3:-?}
+    local bash_source=${4:-?}
+    local bash_command=${5:-?}
     error "Installation failed at line $line_number (source ${bash_source}:${bash_lineno} cmd: ${bash_command}) with exit code $exit_code"
     if [[ "$bash_source" == *"services.sh"* ]] || [[ "$bash_command" == *"mariadb"* ]] || [[ "$bash_command" == *"mysql"* ]]; then
         info "Dumping MariaDB diagnostics before cleanup..."
         systemctl status mariadb --no-pager -l 2>&1 | tail -60 || true
         journalctl -u mariadb --no-pager -n 80 2>&1 | tail -80 || true
-        cat /var/log/mysql/error.log 2>/dev/null | tail -80 || true
+        cat /var/log/mysql/error.log 2>&1 | tail -80 || true
+        cat /var/log/mysql/mariadb.log 2>&1 | tail -80 || true
     fi
     
     # Attempt basic cleanup
@@ -240,11 +241,8 @@ cleanup_lock() {
 }
 
 cleanup_on_error_with_lock() {
-    local line_number=$1
-    local bash_lineno=${2:-?}
-    local bash_source=${3:-?}
-    local bash_command=${4:-?}
-    cleanup_on_error "$line_number" "$bash_lineno" "$bash_source" "$bash_command"
+    local _err=$?
+    cleanup_on_error "$_err" "$1" "${2:-?}" "${3:-?}" "${4:-?}"
     cleanup_lock
 }
 
@@ -460,11 +458,13 @@ generate_password() {
 
 prompt_read() {
     local _pr="$1" _vr="$2" _ans=""
+    printf '%s' "$_pr" >&2
     if [[ -c /dev/tty ]]; then
-        printf '%s' "$_pr" > /dev/tty 2>/dev/null || printf '%s' "$_pr" >&2
+        printf '%s' "$_pr" > /dev/tty 2>/dev/null || true
+    fi
+    if [[ -c /dev/tty ]]; then
         IFS= read -r _ans < /dev/tty 2>/dev/null || IFS= read -r _ans
     else
-        printf '%s' "$_pr" >&2
         IFS= read -r _ans
     fi
     printf -v "$_vr" '%s' "$_ans"
@@ -472,12 +472,14 @@ prompt_read() {
 
 prompt_read_silent() {
     local _pr="$1" _vr="$2" _ans=""
+    printf '%s' "$_pr" >&2
     if [[ -c /dev/tty ]]; then
-        printf '%s' "$_pr" > /dev/tty 2>/dev/null || printf '%s' "$_pr" >&2
+        printf '%s' "$_pr" > /dev/tty 2>/dev/null || true
+    fi
+    if [[ -c /dev/tty ]]; then
         IFS= read -rs _ans < /dev/tty 2>/dev/null || IFS= read -rs _ans
-        echo "" > /dev/tty 2>/dev/null || echo "" >&2
+        echo "" >&2; echo "" > /dev/tty 2>/dev/null || true
     else
-        printf '%s' "$_pr" >&2
         IFS= read -rs _ans; echo "" >&2
     fi
     printf -v "$_vr" '%s' "$_ans"
@@ -517,13 +519,12 @@ show_config_wizard_header() {
 run_configuration_wizard() {
     show_config_wizard_header
 
-    if [[ ! -t 0 || ! -t 1 || ! -t 2 ]] && [[ -c /dev/tty ]] && [[ "$INTERACTIVE_MODE" != "false" ]]; then
-        exec < /dev/tty > /dev/tty 2>&1 2>/dev/null || true
-    fi
-
-    if [[ ! -t 0 ]] && [[ "$INTERACTIVE_MODE" != "false" ]]; then
+    if [[ "$INTERACTIVE_MODE" != "false" ]] && [[ ! -t 0 ]] && [[ ! -c /dev/tty ]]; then
         echo "[ERROR] No interactive terminal detected. Run with a TTY or use --non-interactive." >&2
         exit 1
+    fi
+    if [[ -c /dev/tty ]]; then
+        exec < /dev/tty 2>/dev/null || true
     fi
 
     if [[ "$INTERACTIVE_MODE" == "false" ]]; then
@@ -1210,7 +1211,7 @@ check_ubuntu() {
     if (( $(echo "$TOTAL_RAM_GB >= 1" | bc -l 2>/dev/null || echo "$(($TOTAL_RAM_KB >= 1048576))") )); then
         echo -e "${GREEN}✅ RAM: ${TOTAL_RAM_GB} GB (Sufficient for Laravel)${NC}"
     else
-        echo -e "${YELLOW}⚠️  RAM: ${TOTAL_RAM_GB} GB (Low - 1GB+ recommended for Laravel)${NC}"
+        echo -e "${YELLOW}⚠️ RAM: ${TOTAL_RAM_GB} GB (Low - 1GB+ recommended for Laravel)${NC}"
     fi
     
     # CPU Check
