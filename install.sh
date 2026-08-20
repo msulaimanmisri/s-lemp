@@ -1269,7 +1269,7 @@ update_and_install_core_system() {
     echo ""
     
     wait_for_apt_lock
-    sudo apt install -y curl wget git unzip software-properties-common apt-transport-https ca-certificates gnupg lsb-release bc
+    sudo apt install -y curl wget git unzip software-properties-common ca-certificates gnupg lsb-release bc
 }
 
 # =========================================================================
@@ -1833,11 +1833,52 @@ install_php() {
 
     echo "   "
     echo "============================================="
-    echo -e "${GREEN}Start Installing Ondrej PHP PPA${NC}"
+    echo -e "${GREEN}Setting up Ondrej PHP repository (signed-by keyring)...${NC}"
     echo "============================================="
-    sudo apt install -y software-properties-common
-    sudo add-apt-repository ppa:ondrej/php -y 
-    sudo apt update -y
+
+    local ondrej_list="/etc/apt/sources.list.d/ondrej-php.list"
+    local ondrej_keyring="/etc/apt/keyrings/ondrej-php.gpg"
+    local ubuntu_codename
+    ubuntu_codename=$(lsb_release -cs 2>/dev/null || grep '^VERSION_CODENAME=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "jammy")
+
+    if [[ -f "$ondrej_list" ]] && grep -q "signed-by=${ondrej_keyring}" "$ondrej_list" 2>/dev/null && [[ -f "$ondrej_keyring" ]]; then
+        log "✓ Ondrej PHP repository already configured (signed-by keyring)"
+    elif [[ -f "$ondrej_list" ]] && grep -q "ondrej/php" "$ondrej_list" 2>/dev/null; then
+        log "✓ Ondrej PHP repository already configured (legacy PPA)"
+    else
+        sudo install -m 0755 -d /etc/apt/keyrings 2>/dev/null || sudo mkdir -p /etc/apt/keyrings
+        sudo install -m 0755 -d /etc/apt/sources.list.d 2>/dev/null || true
+
+        local ondrej_setup_ok=false
+
+        # Prefer manual signed-by keyring flow
+        if curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xE5267A6C" 2>/dev/null | gpg --dearmor 2>/dev/null | sudo tee "$ondrej_keyring" >/dev/null 2>&1 && [[ -s "$ondrej_keyring" ]]; then
+            echo "deb [signed-by=${ondrej_keyring}] https://ppa.launchpadcontent.net/ondrej/php/ubuntu ${ubuntu_codename} main" | sudo tee "$ondrej_list" >/dev/null
+            wait_for_apt_lock
+            if sudo apt update 2>&1 | tail -8; then
+                log "✓ Ondrej PHP repository configured (signed-by keyring)"
+                ondrej_setup_ok=true
+            else
+                warning "apt update after Ondrej keyring setup failed — trying PPA fallback..."
+                sudo rm -f "$ondrej_list" "$ondrej_keyring" 2>/dev/null || true
+            fi
+        else
+            warning "Ondrej keyring fetch failed — trying PPA fallback..."
+            sudo rm -f "$ondrej_keyring" 2>/dev/null || true
+        fi
+
+        if [[ "$ondrej_setup_ok" == "false" ]]; then
+            wait_for_apt_lock
+            sudo apt install -y software-properties-common 2>/dev/null || true
+            if sudo add-apt-repository ppa:ondrej/php -y 2>&1 | tail -8; then
+                log "✓ Ondrej PHP repository configured (PPA fallback)"
+            else
+                warning "Failed to configure Ondrej PHP repository — will try Ubuntu archive PHP"
+            fi
+            wait_for_apt_lock
+            sudo apt update 2>&1 | tail -5 || warning "apt update failed after Ondrej setup"
+        fi
+    fi
 
     echo "   "
     echo "============================================="
