@@ -62,6 +62,16 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
 
+        --node-version)
+            if [[ "$2" == "22.x" ]] || [[ "$2" == "24.x" ]]; then
+                NODE_JS_VERSION="$2"
+                shift 2
+            else
+                echo "Error: Invalid Node.js version. Use 22.x or 24.x"
+                exit 1
+            fi
+            ;;
+
         --redis-version)
             if [[ "$2" == "system" ]] || [[ "$2" == "7.4" ]] || [[ "$2" == "8.0" ]]; then
                 REDIS_VERSION="$2"
@@ -91,6 +101,7 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --non-interactive, -n       Run in non-interactive mode with defaults"
             echo "  --php-version VERSION       Set PHP version (8.3, 8.4 or 8.5)"
+            echo "  --node-version VERSION      Set Node.js version (22.x LTS or 24.x LTS)"
             echo "  --redis-version VERSION     Set Redis version (system, 7.4 or 8.0)"
             echo "  --mariadb-version VERSION   Set MariaDB version (system or 11.4)"
             echo "  --queue-driver DRIVER       Set queue driver (redis or database)"
@@ -228,7 +239,7 @@ PHP_VERSION="8.3"
 MARIADB_VERSION="11.4"
 REDIS_VERSION="7.4"
 
-NODE_JS_VERSION="24.x"
+NODE_JS_VERSION="22.x"
 SUPERVISOR_PROCESS_NUM=3
 QUEUE_DRIVER="database"
 SSL_EMAIL=""
@@ -833,6 +844,23 @@ run_configuration_wizard() {
     fi
     echo ""
     
+    # Node.js Version Selection
+    echo ""
+    info "Node.js Version Selection:"
+    echo "  1) Node.js 22.x LTS (Recommended, mature)"
+    echo "  2) Node.js 24.x LTS (Latest)"
+    echo ""
+    while true; do
+        read -p "Choose Node.js version [1]: " node_version_option
+        node_version_option=${node_version_option:-1}
+        case $node_version_option in
+            1) NODE_JS_VERSION="22.x"; log "✓ Selected Node.js 22.x LTS"; break ;;
+            2) NODE_JS_VERSION="24.x"; log "✓ Selected Node.js 24.x LTS"; break ;;
+            *) error "Please choose option 1 or 2" ;;
+        esac
+    done
+    echo ""
+
     # Supervisor Process Number
     echo ""
     while true; do
@@ -2279,45 +2307,84 @@ install_mariadb() {
 }
 
 # =========================================================================
-# Install Node.js
+# Install Node.js — modern keyring flow (no curl|bash)
 # =========================================================================
 install_nodejs() {
     echo " "
     echo "============================================="
     echo -e "${GREEN}Installing Node.js...${NC}"
     echo "============================================="
-    
-    # Check if NodeSource repository is already added
-    if [[ ! -f /etc/apt/sources.list.d/nodesource.list ]]; then
-        info "Adding NodeSource repository..."
-        if curl -fsSL https://deb.nodesource.com/setup_${NODE_JS_VERSION} | sudo -E bash -; then
-            log "✓ NodeSource repository added successfully"
+
+    local nodesource_list="/etc/apt/sources.list.d/nodesource.list"
+    local nodesource_keyring="/etc/apt/keyrings/nodesource.gpg"
+    local expected_version="$NODE_JS_VERSION"
+    local needs_setup=true
+
+    if [[ -f "$nodesource_list" ]]; then
+        if grep -q "nodesource.*node_${expected_version}" "$nodesource_list" 2>/dev/null && [[ -f "$nodesource_keyring" ]]; then
+            needs_setup=false
+            log "✓ NodeSource repository already configured for ${expected_version}"
         else
-            error "Failed to add NodeSource repository"
-            return 1
+            info "NodeSource list exists but version mismatch — will reconfigure for ${expected_version}"
         fi
-    else
-        log "✓ NodeSource repository already exists"
     fi
-    
+
+    if [[ "$needs_setup" == "true" ]]; then
+        info "Setting up NodeSource repository for Node.js ${expected_version} (signed-by keyring)..."
+
+        sudo install -m 0755 -d /etc/apt/keyrings 2>/dev/null || sudo mkdir -p /etc/apt/keyrings
+        sudo install -m 0755 -d /etc/apt/sources.list.d 2>/dev/null || true
+
+        # Try modern keyring flow first
+        if curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key 2>/dev/null | sudo gpg --dearmor -o "$nodesource_keyring" 2>/dev/null; then
+            echo "deb [signed-by=${nodesource_keyring}] https://deb.nodesource.com/node_${expected_version} nodistro main" | sudo tee "$nodesource_list" >/dev/null
+            wait_for_apt_lock
+            if sudo apt update 2>&1 | tail -5; then
+                log "✓ NodeSource repository configured for ${expected_version}"
+            else
+                warning "apt update after NodeSource setup failed — attempting legacy setup fallback..."
+                if curl -fsSL "https://deb.nodesource.com/setup_${expected_version}" 2>/dev/null | sudo bash - 2>&1 | tail -10; then
+                    log "✓ NodeSource repository configured via legacy setup_${expected_version}"
+                else
+                    error "Failed to configure NodeSource repository for ${expected_version}"
+                    return 1
+                fi
+            fi
+        else
+            warning "Modern keyring setup failed — falling back to legacy setup_${expected_version}..."
+            if curl -fsSL "https://deb.nodesource.com/setup_${expected_version}" 2>/dev/null | sudo bash - 2>&1 | tail -10; then
+                log "✓ NodeSource repository configured via legacy setup_${expected_version}"
+            else
+                error "Failed to add NodeSource repository for ${expected_version}"
+                return 1
+            fi
+        fi
+    fi
+
+    wait_for_apt_lock
     sudo apt install -y nodejs
-    
+
     echo " "
     echo "============================================="
     echo -e "${GREEN}Verifying Node.js installation...${NC}"
     echo "============================================="
-    
+
     if command -v node &>/dev/null && command -v npm &>/dev/null; then
         NODE_VERSION=$(node --version)
         NPM_VERSION=$(npm --version)
         log "✓ Node.js installed successfully"
         info "Node.js version: $NODE_VERSION"
         info "NPM version: $NPM_VERSION"
-        
-        # Verify versions meet minimum requirements
-        local node_major_version=$(echo "$NODE_VERSION" | sed 's/v//' | cut -d. -f1)
-        if [[ "$node_major_version" -ge "18" ]]; then
-            log "✓ Node.js version meets Laravel requirements"
+
+        local node_major_version
+        node_major_version=$(echo "$NODE_VERSION" | sed 's/v//' | cut -d. -f1)
+        local expected_major
+        expected_major=$(echo "$expected_version" | cut -d. -f1 | tr -d 'x')
+
+        if [[ "$node_major_version" == "$expected_major" ]]; then
+            log "✓ Node.js major version matches selected ${expected_version} (v${node_major_version})"
+        elif [[ "$node_major_version" -ge "18" ]]; then
+            warning "Node.js v${node_major_version} installed but expected ${expected_version} — check ${nodesource_list}"
         else
             warning "Node.js version might be too old for some Laravel features"
         fi
