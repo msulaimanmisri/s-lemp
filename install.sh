@@ -1265,7 +1265,33 @@ install_nginx() {
     
     sudo systemctl start nginx
     sudo systemctl enable nginx
-    
+
+    # Harden /etc/nginx/nginx.conf
+    info "Hardening Nginx global config..."
+    if [[ -f /etc/nginx/nginx.conf ]]; then
+        sudo cp /etc/nginx/nginx.conf "/etc/nginx/nginx.conf.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+
+        if ! grep -q "server_tokens off" /etc/nginx/nginx.conf 2>/dev/null; then
+            sudo sed -i 's/^\s*#*\s*server_tokens.*/server_tokens off;/' /etc/nginx/nginx.conf 2>/dev/null || true
+            if ! grep -q "server_tokens off" /etc/nginx/nginx.conf 2>/dev/null; then
+                sudo sed -i '/http {/a \    server_tokens off;' /etc/nginx/nginx.conf 2>/dev/null || true
+            fi
+            log "✓ server_tokens off added to nginx.conf"
+        fi
+
+        if ! grep -q "limit_req_zone" /etc/nginx/nginx.conf 2>/dev/null; then
+            sudo tee /etc/nginx/conf.d/rate-limit.conf >/dev/null <<'RLEOF'
+# S-LEMP — rate limiting (included via conf.d/*.conf)
+limit_req_zone $binary_remote_addr zone=slemp_login:10m rate=5r/s;
+limit_req_zone $binary_remote_addr zone=slemp_global:10m rate=20r/s;
+limit_req_status 429;
+RLEOF
+            log "✓ Rate-limit zones written to /etc/nginx/conf.d/rate-limit.conf"
+        fi
+    else
+        warning "nginx.conf not found — skipping global hardening"
+    fi
+
     # Test nginx configuration
     if sudo nginx -t; then
         log "✓ Nginx configuration is valid"
@@ -1392,24 +1418,35 @@ server {
     root ${PROJECT_ROOT}/${PROJECT_NAME}/public;
     index index.php index.html index.htm;
 
-    # Security headers
+    # Security headers (production-safe: no noindex, no unsafe-inline)
     add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-XSS-Protection "1; mode=block" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "no-referrer-when-downgrade" always;
-    add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
-    add_header X-Robots-Tag "noindex, nofollow" always;
+    add_header Content-Security-Policy "default-src 'self' https: data: blob:" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header X-Permitted-Cross-Domain-Policies "none" always;
+    add_header Cross-Origin-Opener-Policy "same-origin" always;
+    # HSTS is safe to send on HTTP; browsers only honor on HTTPS. Remove if behind TLS-terminating proxy that already sets it.
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
 
     # Laravel-specific optimizations
     client_max_body_size 64M;
     fastcgi_read_timeout 300;
+    client_body_timeout 20;
+    client_header_timeout 20;
 
     # Gzip compression
     gzip on;
     gzip_vary on;
     gzip_min_length 1024;
+    gzip_comp_level 5;
+    gzip_buffers 16 8k;
+    gzip_http_version 1.1;
     gzip_proxied expired no-cache no-store private auth;
-    gzip_types text/plain text/css text/xml text/javascript application/x-javascript application/xml+rss application/json;
+    gzip_types text/plain text/css text/xml text/javascript application/javascript application/json application/xml application/xml+rss image/svg+xml font/woff font/woff2;
+
+    # Rate limiting (uses zones from /etc/nginx/conf.d/rate-limit.conf)
+    limit_req zone=slemp_global burst=40 nodelay;
 
     # Handle Laravel public assets
     location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
@@ -1425,7 +1462,7 @@ server {
         fastcgi_index index.php;
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
         include fastcgi_params;
-        
+
         # Laravel-specific fastcgi params
         fastcgi_param HTTP_PROXY "";
         fastcgi_param HTTPS \$https if_not_empty;
@@ -1436,23 +1473,30 @@ server {
         try_files \$uri \$uri/ /index.php?\$query_string;
     }
 
-    # Deny access to sensitive files
-    location ~ /\.(ht|env) {
+    # Deny dotfiles and sensitive project files
+    location ~ /\. {
         deny all;
+        access_log off;
+        log_not_found off;
     }
-    
-    location ~ /storage/ {
+
+    location ~* /(\\.env|\\.git|composer\\.(json|lock)|package-lock\\.json|yarn\\.lock)$ {
         deny all;
+        access_log off;
+        log_not_found off;
     }
-    
-    location ~ /bootstrap/cache/ {
+
+    # Block direct access to storage/app and bootstrap/cache outside public/
+    location ~* ^/(storage|bootstrap/cache)/ {
         deny all;
     }
 
-    # Handle Laravel storage symlink
-    location ^~ /storage {
-        alias ${PROJECT_ROOT}/${PROJECT_NAME}/public/storage;
+    # Laravel public/storage symlink
+    location ^~ /storage/ {
+        alias ${PROJECT_ROOT}/${PROJECT_NAME}/storage/app/public/;
         try_files \$uri \$uri/ =404;
+        expires 1y;
+        access_log off;
     }
 }
 EOF
