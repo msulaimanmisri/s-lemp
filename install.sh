@@ -1,26 +1,15 @@
 #!/bin/bash
 
-# Allow piped install via `wget -qO- ... | sudo bash` — only block sourcing from interactive shell
-if [[ "${BASH_SOURCE[0]}" != "${0}" ]] && [[ -t 0 ]]; then
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
     echo "Error: This script should be executed directly, not sourced."
-    echo "Usage: ./installation-script.sh [--non-interactive]"
-    echo "Hint: this script must be executed, not sourced. For piped install use:"
-    echo "      wget -qO- https://raw.githubusercontent.com/msulaimanmisri/s-lemp/main/install.sh | sudo bash"
+    echo "Usage: sudo ./install.sh"
     exit 1
 fi
 
-# =========================================================================
-# Self-fetching bootstrap
-# install.sh requires lib/services.sh. Support both the documented install
-# methods: direct download (wget install.sh) and the piped one-liner
-# (wget -qO- ... | sudo bash). In the piped case there is no script file on
-# disk, so we fetch both files into a temp dir and re-exec. In the direct
-# case we fetch only the missing companion library next to this script.
-# =========================================================================
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null || dirname "$0")"
+SERVICES_LIB="${SCRIPT_DIR}/lib/services.sh"
 RAW_BASE="https://raw.githubusercontent.com/msulaimanmisri/s-lemp/main"
-
 __slemp_download() {
-    # __slemp_download <url> <outfile>
     if command -v wget >/dev/null 2>&1; then
         wget -qO "$2" "$1"
     elif command -v curl >/dev/null 2>&1; then
@@ -29,47 +18,17 @@ __slemp_download() {
         return 1
     fi
 }
-
-__slemp_bootstrap() {
-    local script_path="${BASH_SOURCE[0]:-$0}"
-
-    # Piped / stdin execution: no real script file on disk.
-    if [[ "$script_path" == "/dev/stdin" || "$script_path" == "-stdin" || ! -f "$script_path" ]]; then
-        local tmp
-        tmp="$(mktemp -d /tmp/s-lemp.XXXXXX)" || { echo "[ERROR] Cannot create temp directory" >&2; exit 1; }
-        echo "ℹ️  Piped install detected — fetching installer and library..." >&2
-        if ! __slemp_download "${RAW_BASE}/install.sh" "${tmp}/install.sh"; then
-            echo "[ERROR] Failed to download install.sh" >&2
-            rm -rf "$tmp"
-            exit 1
-        fi
-        mkdir -p "${tmp}/lib"
-        if ! __slemp_download "${RAW_BASE}/lib/services.sh" "${tmp}/lib/services.sh"; then
-            echo "[ERROR] Failed to download lib/services.sh" >&2
-            rm -rf "$tmp"
-            exit 1
-        fi
-        chmod +x "${tmp}/install.sh"
-        exec bash "${tmp}/install.sh" "$@"
+if [[ ! -f "${SERVICES_LIB}" ]]; then
+    echo "Fetching companion library lib/services.sh ..." >&2
+    mkdir -p "${SCRIPT_DIR}/lib"
+    if ! __slemp_download "${RAW_BASE}/lib/services.sh" "${SERVICES_LIB}"; then
+        echo "[ERROR] Missing services library and auto-download failed." >&2
+        echo "        Please clone the repository instead:" >&2
+        echo "          git clone https://github.com/msulaimanmisri/s-lemp.git && cd s-lemp && sudo ./install.sh" >&2
+        exit 1
     fi
-
-    # Direct execution: ensure lib/services.sh sits next to this script.
-    local script_dir
-    script_dir="$(cd "$(dirname "$script_path")" && pwd)"
-    if [[ ! -f "${script_dir}/lib/services.sh" ]]; then
-        echo "ℹ️  Fetching companion library lib/services.sh ..." >&2
-        mkdir -p "${script_dir}/lib"
-        if ! __slemp_download "${RAW_BASE}/lib/services.sh" "${script_dir}/lib/services.sh"; then
-            echo "[ERROR] Missing services library and auto-download failed." >&2
-            echo "        Please clone the repository instead:" >&2
-            echo "          git clone https://github.com/msulaimanmisri/s-lemp.git && cd s-lemp && sudo ./install.sh" >&2
-            exit 1
-        fi
-        chmod +x "${script_dir}/lib/services.sh"
-    fi
-}
-
-__slemp_bootstrap "$@"
+    chmod +x "${SERVICES_LIB}"
+fi
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -520,9 +479,10 @@ show_config_wizard_header() {
 # Main configuration wizard
 run_configuration_wizard() {
     show_config_wizard_header
-    
-    if [[ ! -t 0 ]]; then
-        INTERACTIVE_MODE=false
+
+    if [[ ! -t 0 ]] && [[ "$INTERACTIVE_MODE" != "false" ]]; then
+        echo "[ERROR] No interactive terminal detected. Run with a TTY or use --non-interactive." >&2
+        exit 1
     fi
 
     if [[ "$INTERACTIVE_MODE" == "false" ]]; then
@@ -1250,19 +1210,8 @@ check_ubuntu() {
     fi
 }
 
-# =========================================================================
-# Load service modules
-# =========================================================================
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null || dirname "$0")"
-SERVICES_LIB="${SCRIPT_DIR}/lib/services.sh"
-if [[ -f "${SERVICES_LIB}" ]]; then
-    # shellcheck source=lib/services.sh
-    source "${SERVICES_LIB}"
-else
-    echo "[ERROR] Missing services library: ${SERVICES_LIB}" >&2
-    echo "        Re-run the installer, or clone the repo: git clone https://github.com/msulaimanmisri/s-lemp.git && cd s-lemp && sudo ./install.sh" >&2
-    exit 1
-fi
+# shellcheck source=lib/services.sh
+source "${SERVICES_LIB}"
 
 # =========================================================================
 # System verification + completion helpers
