@@ -992,6 +992,7 @@ setup_mariadb_repo() {
         warning "curl not available yet — attempting repo setup anyway"
     fi
 
+    wait_for_apt_lock
     if curl -fsSL https://r.mariadb.com/downloads/mariadb_repo_setup 2>/dev/null | sudo bash -s -- --mariadb-server-version="11.4" 2>&1; then
         log "✓ MariaDB 11.4 LTS repository configured"
         wait_for_apt_lock
@@ -1008,7 +1009,7 @@ setup_mariadb_repo() {
     if curl -fsSL https://r.mariadb.com/downloads/mariadb_repo_setup 2>/dev/null | gpg --dearmor 2>/dev/null | sudo tee /etc/apt/keyrings/mariadb.gpg >/dev/null 2>&1; then
         log "✓ MariaDB GPG key installed"
     else
-        warning "Failed to install MariaDB GPG key — falling back to Ubuntu archive"
+        warning "Failed to install MariaDB GPG key — falling back to Ubuntu archive (system). Requested 11.4 not available."
         MARIADB_VERSION="system"
         return 0
     fi
@@ -1020,7 +1021,7 @@ setup_mariadb_repo() {
     if sudo apt update 2>&1 | tail -5; then
         log "✓ MariaDB 11.4 LTS repository configured (manual)"
     else
-        warning "apt update after MariaDB repo setup failed — falling back to Ubuntu archive"
+        warning "apt update after MariaDB repo setup failed — falling back to Ubuntu archive (system). Requested 11.4 not available."
         sudo rm -f /etc/apt/sources.list.d/mariadb.list /etc/apt/sources.list.d/mariadb-enterprise.list 2>/dev/null || true
         MARIADB_VERSION="system"
     fi
@@ -1093,15 +1094,66 @@ install_mariadb() {
     setup_mariadb_repo
 
     wait_for_apt_lock
-    sudo apt install -y mariadb-server mariadb-client
-    
+    sudo DEBIAN_FRONTEND=noninteractive apt install -y mariadb-server mariadb-client
+    sudo systemctl daemon-reload 2>/dev/null || true
+    wait_for_apt_lock; sleep 1
+
+    if ss -lntp 2>/dev/null | grep -q ':3306 '; then
+        warning "Port 3306 already in use — checking holder:"; ss -lntp 2>/dev/null | grep ':3306' || true
+    fi
+    if command -v aa-status >/dev/null 2>&1 && sudo aa-status 2>/dev/null | grep -q mariadb; then
+        info "AppArmor profile for mysqld active"
+    fi
+    if [[ ! -d /var/lib/mysql/mysql ]]; then
+        warning "/var/lib/mysql/mysql missing — initializing data directory"
+        sudo mysql_install_db --user=mysql 2>&1 | tail -20 || true
+        sudo chown -R mysql:mysql /var/lib/mysql 2>/dev/null || true
+    fi
+
     echo " "
     echo "============================================="
     echo -e "${GREEN}Starting and configuring MariaDB...${NC}"
     echo "============================================="
-    
-    sudo systemctl start mariadb
-    sudo systemctl enable mariadb
+
+    if ! systemctl is-system-running >/dev/null 2>&1 && ! systemctl status mariadb >/dev/null 2>&1; then
+        if [[ -n "${WSL_DISTRO_NAME:-}" ]] || systemd-detect-virt --container >/dev/null 2>&1; then
+            warning "systemd not available (WSL/container) — trying service/mysqld fallback"
+            if ! sudo service mariadb start 2>&1 | tail -20; then
+                sudo mysqld --user=mysql --daemonize 2>&1 | tail -20 || {
+                    error "MariaDB failed to start without systemd"
+                    journalctl --no-pager -n 80 2>&1 | tail -80 || true
+                    cat /var/log/mysql/error.log 2>/dev/null | tail -80 || true
+                    return 1
+                }
+            fi
+        else
+            if ! sudo systemctl start mariadb 2>&1 | tail -20; then
+                error "systemctl start mariadb failed"
+                sudo systemctl status mariadb --no-pager -l 2>&1 | tail -60 || true
+                sudo journalctl -u mariadb --no-pager -n 80 2>&1 | tail -80 || true
+                sudo cat /var/log/mysql/error.log 2>/dev/null | tail -80 || true
+                return 1
+            fi
+            sudo systemctl enable mariadb 2>/dev/null || true
+        fi
+    else
+        if ! sudo systemctl start mariadb 2>&1 | tail -20; then
+            error "systemctl start mariadb failed"
+            sudo systemctl status mariadb --no-pager -l 2>&1 | tail -60 || true
+            sudo journalctl -u mariadb --no-pager -n 80 2>&1 | tail -80 || true
+            sudo cat /var/log/mysql/error.log 2>/dev/null | tail -80 || true
+            return 1
+        fi
+        sudo systemctl enable mariadb 2>/dev/null || true
+        for _i in {1..15}; do systemctl is-active --quiet mariadb && break; sleep 2; done
+        if ! systemctl is-active --quiet mariadb; then
+            error "MariaDB not active after start"
+            sudo journalctl -u mariadb --no-pager -n 80 2>&1 | tail -80 || true
+            sudo cat /var/log/mysql/error.log 2>/dev/null | tail -80 || true
+            return 1
+        fi
+        for _i in {1..15}; do mysqladmin ping --silent 2>/dev/null && break; mysql -e "SELECT 1" >/dev/null 2>&1 && break; sleep 2; done
+    fi
 
     echo "   "
     echo "============================================="
@@ -1121,7 +1173,8 @@ install_mariadb() {
     done
     
     # Secure MariaDB with error handling
-    if sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASSWORD}';"; then
+    local esc_root_password=${DB_ROOT_PASSWORD//\'/\'\'}
+    if sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '${esc_root_password}';"; then
         log "✓ Root password set"
     else
         warning "Failed to set root password, might already be set"
@@ -1131,7 +1184,7 @@ install_mariadb() {
     sudo mysql -u root -p"${DB_ROOT_PASSWORD}" -e "DELETE FROM mysql.user WHERE User='';" 2>/dev/null || warning "Failed to remove anonymous users"
     sudo mysql -u root -p"${DB_ROOT_PASSWORD}" -e "DROP DATABASE IF EXISTS test;" 2>/dev/null || warning "Test database might not exist"
     sudo mysql -u root -p"${DB_ROOT_PASSWORD}" -e "DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';" 2>/dev/null || true
-    sudo mysql -u root -p"${DB_ROOT_PASSWORD}" -e "FLUSH PRIVILEGES;" || {
+    sudo mysql -u root -p"${DB_ROOT_PASSWORD}" -e "FLUSH PRIVILEGES;" 2>/dev/null || sudo mysql -e "FLUSH PRIVILEGES;" 2>/dev/null || {
         error "Failed to flush privileges"
         return 1
     }
@@ -1145,6 +1198,10 @@ install_mariadb() {
     # Use 11.4 default collation when available; falls back gracefully on older servers
     local db_collation="utf8mb4_uca1400_ai_ci"
     if [[ "$MARIADB_VERSION" == "system" ]]; then
+        db_collation="utf8mb4_unicode_ci"
+    fi
+    if ! mysql -e "SHOW COLLATION LIKE '${db_collation}'" 2>/dev/null | grep -q "${db_collation}"; then
+        warning "Collation ${db_collation} not supported by this MariaDB — falling back to utf8mb4_unicode_ci"
         db_collation="utf8mb4_unicode_ci"
     fi
 
@@ -1187,11 +1244,14 @@ install_mariadb() {
     }
 
     configure_mariadb_tuning
-    if sudo systemctl restart mariadb 2>/dev/null; then
+    if sudo systemctl restart mariadb 2>&1 | tail -20; then
         log "✓ MariaDB restarted with Laravel tuning"
         sleep 2
     else
-        warning "MariaDB tuning written but restart failed — will apply on next restart"
+        warning "MariaDB tuning written but restart failed — dumping diagnostics"
+        sudo journalctl -u mariadb --no-pager -n 80 2>&1 | tail -80 || true
+        sudo cat /var/log/mysql/error.log 2>/dev/null | tail -80 || true
+        return 1
     fi
 
     # Test database connection

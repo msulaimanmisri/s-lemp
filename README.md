@@ -57,7 +57,7 @@ sudo apt update
 
 > **Warning:** `remove.sh` is destructive — it **permanently deletes all databases, `/var/www` contents, SSL certificates and configs**. Only use it on disposable/test servers, not to fix a transient dpkg lock.
 
-### Method 1: Direct Download and Execute
+### Direct Download and Execute
 
 ```bash
 # Download the installation script
@@ -70,29 +70,7 @@ chmod +x install.sh
 sudo ./install.sh
 ```
 
-> This fetches the companion `lib/services.sh` automatically on first run, so only `install.sh` needs to be downloaded manually.
-
-### Method 2: One-Line Installation
-
-```bash
-# Download and run in one command (interactive mode)
-wget -qO- https://raw.githubusercontent.com/msulaimanmisri/s-lemp/main/install.sh | sudo bash
-```
-
-> The one-liner automatically fetches both `install.sh` and its companion `lib/services.sh` into a temporary directory and runs them, so no manual clone is required.
-
-### Method 3: Non-Interactive Installation
-
-```bash
-# Download the script
-wget https://raw.githubusercontent.com/msulaimanmisri/s-lemp/main/install.sh
-
-# Run in non-interactive mode with defaults
-sudo ./install.sh --non-interactive
-
-# Or with custom options
-sudo ./install.sh --non-interactive --php-version 8.4 --queue-driver redis
-```
+> `install.sh` fetches its companion `lib/services.sh` automatically if missing, so only `install.sh` needs to be downloaded manually.
 
 ## 🔧 Installation Options
 
